@@ -7,7 +7,7 @@ import time
 import threading
 import queue
 from contextlib import contextmanager
-from collections import defaultdict # make sure to have this file for cross-instance forwarding
+from collections import defaultdict 
 import psycopg2
 import telebot
 from telebot.types import InputMediaPhoto, InputMediaVideo
@@ -1670,4 +1670,5 @@ if __name__ == "__main__":
     print("✅ Background workers running.")
 
     bot.infinity_polling(skip_pending=True)
+
 
