@@ -24,7 +24,7 @@ FIRST_ADMIN_ID = 8046643349 # replace with your Telegram ID for initial admin ac
 
 
 REQUIRED_MEDIA = 12
-INACTIVITY_LIMIT = 6 * 60 * 60  # 6 hours
+INACTIVITY_LIMIT = 5 * 60  # 6 hours
 
 bot = telebot.TeleBot(BOT_TOKEN)
 broadcast_queue = queue.Queue()
@@ -1670,5 +1670,6 @@ if __name__ == "__main__":
     print("✅ Background workers running.")
 
     bot.infinity_polling(skip_pending=True)
+
 
 
