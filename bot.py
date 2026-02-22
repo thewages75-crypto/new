@@ -1078,25 +1078,6 @@ def _process_album(messages):
 )
 def relay(message):
 
-    # =========================
-    # ♻ DUPLICATE FILTER (FIRST)
-    # =========================
-    if message.content_type in ['photo', 'video'] and is_duplicate_filter_enabled():
-
-        file_id = (
-            message.photo[-1].file_id
-            if message.content_type == 'photo'
-            else message.video.file_id
-        )
-
-        is_dup = check_and_register_duplicate(file_id, message.chat.id)
-
-        if is_dup:
-            return  # silently ignore BEFORE activation
-
-    # =========================
-    # 🔒 RESTRICTIONS & ACTIVATION
-    # =========================
     if handle_restrictions(message):
         return
     # =========================
