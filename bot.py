@@ -959,20 +959,6 @@ def _process_single(message):
 
     sender_id = message.chat.id
     receivers = get_active_receivers()
-    # Duplicate filtering
-    if message.content_type in ['photo', 'video'] and is_duplicate_filter_enabled():
-
-        file_id = (
-            message.photo[-1].file_id
-            if message.content_type == 'photo'
-            else message.video.file_id
-        )
-
-        is_dup = check_and_register_duplicate(file_id, sender_id)
-
-        if is_dup:
-            return  # silently ignore
-
     for user_id in receivers:
 
         if user_id == sender_id:
@@ -1036,22 +1022,6 @@ def _process_album(messages):
     media_objects = []
 
     for index, msg in enumerate(messages):
-            # =========================
-            # ♻ DUPLICATE CHECK
-            # =========================
-        if is_duplicate_filter_enabled():
-
-            file_id = (
-                msg.photo[-1].file_id
-                if msg.content_type == 'photo'
-                else msg.video.file_id
-            )
-
-            is_dup = check_and_register_duplicate(file_id, sender_id)
-
-            if is_dup:
-                continue  # skip only this item
-
         if msg.content_type == "photo":
             media_objects.append(
                 InputMediaPhoto(
@@ -1110,7 +1080,21 @@ def relay(message):
 
     if handle_restrictions(message):
         return
+    # =========================
+    # ♻ DUPLICATE FILTER (EARLY)
+    # =========================
+    if message.content_type in ['photo', 'video'] and is_duplicate_filter_enabled():
 
+        file_id = (
+            message.photo[-1].file_id
+            if message.content_type == 'photo'
+            else message.video.file_id
+        )
+
+        is_dup = check_and_register_duplicate(file_id, message.chat.id)
+
+        if is_dup:
+            return  # silently ignore and DO NOT count activation
     # =========================
     # 1️⃣ TELEGRAM ALBUM
     # =========================
@@ -1247,16 +1231,30 @@ def start_background_workers():
 @bot.message_handler(commands=['dupon'])
 def enable_duplicate_filter(message):
     if not is_admin(message.chat.id):
+        bot.send_message(message.chat.id, "Not admin.")
         return
 
     set_duplicate_filter(True)
-    bot.send_message(message.chat.id, "✅ Duplicate filter enabled.")
+    bot.send_message(message.chat.id, "✅ Duplicate filter ENABLED.")
 
 
 @bot.message_handler(commands=['dupoff'])
 def disable_duplicate_filter(message):
     if not is_admin(message.chat.id):
+        bot.send_message(message.chat.id, "Not admin.")
         return
+
+    set_duplicate_filter(False)
+    bot.send_message(message.chat.id, "❌ Duplicate filter DISABLED.")
+
+
+@bot.message_handler(commands=['dupstatus'])
+def duplicate_status(message):
+    if not is_admin(message.chat.id):
+        return
+
+    status = "ON" if is_duplicate_filter_enabled() else "OFF"
+    bot.send_message(message.chat.id, f"♻ Duplicate filter is {status}")
 
     set_duplicate_filter(False)
     bot.send_message(message.chat.id, "❌ Duplicate filter disabled.")
