@@ -1155,7 +1155,7 @@ def _process_single(message):
             
         except Exception as e:
             print("Single send error:", e)
-    if message.content_type in ['photo', 'video']:
+    # if message.content_type in ['photo', 'video']:
         #  external_forward.forward_single(bot, message)
 
    
@@ -2000,3 +2000,4 @@ if __name__ == "__main__":
     print("✅ Background workers running.")
 
     bot.infinity_polling(skip_pending=True)
+
