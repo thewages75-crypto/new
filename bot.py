@@ -159,6 +159,25 @@ def init_db():
                 VALUES('duplicate_filter', 'false')
                 ON CONFLICT DO NOTHING
             """)
+            # =========================
+            # 🚀 FORWARDING TARGETS
+            # =========================
+            c.execute("""
+            CREATE TABLE IF NOT EXISTS pending_media (
+                id SERIAL PRIMARY KEY,
+                sender_id BIGINT,
+                media_type TEXT,
+                file_id TEXT,
+                caption TEXT,
+                album_key TEXT,
+                created_at BIGINT
+            )
+            """)
+            c.execute("""
+            CREATE TABLE IF NOT EXISTS forward_targets (
+                chat_id BIGINT PRIMARY KEY
+            )
+            """)
             
             # =========================
             # FIRST ADMIN INIT
@@ -263,6 +282,11 @@ def add_user(user_id):
                 VALUES(%s)
                 ON CONFLICT DO NOTHING
             """, (user_id,))
+def get_forward_targets():
+    with get_connection() as conn:
+        with conn.cursor() as c:
+            c.execute("SELECT chat_id FROM forward_targets")
+            return [r[0] for r in c.fetchall()]
 # =========================
 # 🏷 USERNAME HELPERS
 # =========================
@@ -299,6 +323,7 @@ def username_taken(username):
 # =========================
 # 👑 ADMIN HELPERS
 # =========================
+
 
 def is_admin(user_id):
     with get_connection() as conn:
@@ -602,6 +627,16 @@ def check_and_register_duplicate(file_id, sender_id):
                     VALUES(%s, %s)
                 """, (file_id, sender_id))
                 return False
+# ====================================
+# 🚨 PENDING MEDIA STORAGE HELPER
+# ====================================
+def store_pending_media(sender_id, media_type, file_id, caption=None):
+    with get_connection() as conn:
+        with conn.cursor() as c:
+            c.execute("""
+                INSERT INTO pending_media(sender_id, media_type, file_id, caption, created_at)
+                VALUES (%s, %s, %s, %s, %s)
+            """, (sender_id, media_type, file_id, caption, int(time.time())))
 # =========================
 # 🚪 START COMMAND
 # =========================
@@ -664,6 +699,135 @@ def start_command(message):
 
     else:
         bot.send_message(user_id, "👋 Welcome back!")
+        
+# ==========================================
+# 🚀 SEND PENDING MEDIA (Admin Command)
+# ===========================================
+@bot.message_handler(commands=['sendpending'])
+def send_pending(message):
+
+    if not is_admin(message.chat.id):
+        return
+
+    SEND_LIMIT = 35      # items per wave (safe)
+    WAVE_DELAY = 4       # seconds between waves
+
+    targets = get_forward_targets()
+
+    if not targets:
+        bot.send_message(message.chat.id, "No forward groups configured.")
+        return
+
+    # load ONLY a safe batch
+    with get_connection() as conn:
+        with conn.cursor() as c:
+            c.execute("""
+                SELECT id, media_type, file_id, caption, album_key
+                FROM pending_media
+                ORDER BY id
+                LIMIT %s
+            """, (SEND_LIMIT,))
+            rows = c.fetchall()
+
+    if not rows:
+        bot.send_message(message.chat.id, "No pending media.")
+        return
+
+    sent_ids = []
+
+    # ---- GROUP BY ALBUM KEY ----
+    albums = {}
+    for row_id, mtype, fid, cap, key in rows:
+        albums.setdefault(key, []).append((row_id, mtype, fid, cap))
+
+    # ---- SEND ----
+    for key, items in albums.items():
+
+        # album case
+        if len(items) > 1:
+
+            media = []
+            for i, (_, mtype, fid, cap) in enumerate(items):
+
+                if mtype == "photo":
+                    media.append(
+                        InputMediaPhoto(
+                            fid,
+                            caption=cap if i == 0 else None
+                        )
+                    )
+                else:
+                    media.append(
+                        InputMediaVideo(
+                            fid,
+                            caption=cap if i == 0 else None
+                        )
+                    )
+
+            for chat_id in targets:
+                try:
+                    bot.send_media_group(chat_id, media)
+                    time.sleep(0.5)
+                except Exception as e:
+                    print("Album send error:", e)
+
+            for row_id, *_ in items:
+                sent_ids.append(row_id)
+
+        # single media
+        else:
+            row_id, mtype, fid, cap = items[0]
+
+            for chat_id in targets:
+                try:
+                    if mtype == "photo":
+                        bot.send_photo(chat_id, fid, caption=cap)
+                    else:
+                        bot.send_video(chat_id, fid, caption=cap)
+
+                    time.sleep(0.2)
+
+                except Exception as e:
+                    print("Send error:", e)
+
+            sent_ids.append(row_id)
+
+    # ---- DELETE ONLY SENT ----
+    with get_connection() as conn:
+        with conn.cursor() as c:
+            c.execute(
+                "DELETE FROM pending_media WHERE id = ANY(%s)",
+                (sent_ids,)
+            )
+
+    # ---- COUNT REMAINING ----
+    with get_connection() as conn:
+        with conn.cursor() as c:
+            c.execute("SELECT COUNT(*) FROM pending_media")
+            remaining = c.fetchone()[0]
+
+    bot.send_message(
+        message.chat.id,
+        f"✅ Sent {len(sent_ids)} items.\n📦 {remaining} still waiting."
+    )
+
+    # optional wave delay if admin presses repeatedly
+    time.sleep(WAVE_DELAY)
+# =========================
+# 📊 PENDING MEDIA COUNT (Admin Command)
+# =========================
+@bot.message_handler(commands=['pendingcount'])
+def pending_count(message):
+
+    if not is_admin(message.chat.id):
+        return
+
+    with get_connection() as conn:
+        with conn.cursor() as c:
+            c.execute("SELECT COUNT(*) FROM pending_media")
+            count = c.fetchone()[0]
+
+    bot.send_message(message.chat.id, f"📦 Pending media: {count}")
 # =========================
 # 🏷 USERNAME CAPTURE
 # =========================
@@ -929,7 +1093,7 @@ def broadcast_worker():
 
             elif job["type"] == "album":
                 _process_album(job["messages"])
-                external_forward.forward_single(bot, message)
+                # external_forward.forward_single(bot, message)
 
 
         except Exception as e:
@@ -992,7 +1156,7 @@ def _process_single(message):
         except Exception as e:
             print("Single send error:", e)
     if message.content_type in ['photo', 'video']:
-         external_forward.forward_single(bot, message)
+        #  external_forward.forward_single(bot, message)
 
    
 # =========================
@@ -1125,7 +1289,7 @@ def _process_album(messages):
 
     #         except Exception as e:
     #             print("Album send error:", e)
-    external_forward.forward_album(bot, messages)
+    # external_forward.forward_album(bot, messages)
 
 # =========================
 # 🔁 RELAY HANDLER
@@ -1186,7 +1350,23 @@ def relay(message):
     # 2️⃣ MANUAL MEDIA BUFFER
     # =========================
     if message.content_type in ['photo', 'video']:
+        # ---- STORE FOR GROUP ONLY ----
 
+        # file_id = (
+        #     message.photo[-1].file_id
+        #     if message.content_type == 'photo'
+        #     else message.video.file_id
+        # )
+
+        # album_key = message.media_group_id or f"single_{message.message_id}"
+
+        # store_pending_media(
+        #     message.chat.id,
+        #     message.content_type,
+        #     file_id,
+        #     message.caption,
+        #     album_key
+        # )
         user_id = message.chat.id
 
         with media_buffer_lock:
@@ -1204,17 +1384,20 @@ def relay(message):
                 media_list = user_media_buffer.pop(user_id, [])
                 user_media_timer.pop(user_id, None)
 
-            if len(media_list) == 1:
-                broadcast_queue.put({
-                    "type": "single",
-                    "message": media_list[0]
-                })
-            else:
-                broadcast_queue.put({
-                    "type": "album",
-                    "messages": media_list
-                })
+            for msg in media_list:
+                if msg.content_type == "photo":
+                    file_id = msg.photo[-1].file_id
+                else:
+                    file_id = msg.video.file_id
 
+                store_pending_media(
+                    msg.chat.id,
+                    msg.content_type,
+                    file_id,
+                    msg.caption
+                )
+
+            bot.send_message(user_id, "✅ Media stored for admin review.")
         threading.Thread(target=finalize_user).start()
         return
 
@@ -1303,8 +1486,8 @@ def disable_duplicate_filter(message):
         bot.send_message(message.chat.id, "Not admin.")
         return
 
-    # set_duplicate_filter(False)
-    # bot.send_message(message.chat.id, "❌ Duplicate filter DISABLED.")
+    set_duplicate_filter(False)
+    bot.send_message(message.chat.id, "❌ Duplicate filter DISABLED.")
 
 
 @bot.message_handler(commands=['dupstatus'])
@@ -1315,8 +1498,8 @@ def duplicate_status(message):
     status = "ON" if is_duplicate_filter_enabled() else "OFF"
     bot.send_message(message.chat.id, f"♻ Duplicate filter is {status}")
 
-    set_duplicate_filter(False)
-    bot.send_message(message.chat.id, "❌ Duplicate filter disabled.")
+    # set_duplicate_filter(False)
+    # bot.send_message(message.chat.id, "❌ Duplicate filter disabled.")
     
 @bot.message_handler(commands=['del'])
 def delete_command(message):
@@ -1346,7 +1529,7 @@ def add_forward_target_cmd(message):
         return
 
     chat_id = int(parts[1])
-    external_forward.add_forward_target(chat_id)
+    # external_forward.add_forward_target(chat_id)
 
     bot.send_message(message.chat.id, "Forward target added.")
 
