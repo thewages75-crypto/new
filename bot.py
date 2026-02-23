@@ -766,8 +766,11 @@ def send_pending(message):
 
             for chat_id in targets:
                 try:
-                    bot.send_media_group(chat_id, media)
-                    time.sleep(0.5)
+                    broadcast_queue.put({
+                    "type": "group_album",
+                    "group": chat_id,
+                    "media": media
+                })
                 except Exception as e:
                     print("Album send error:", e)
 
@@ -780,11 +783,13 @@ def send_pending(message):
 
             for chat_id in targets:
                 try:
-                    if mtype == "photo":
-                        bot.send_photo(chat_id, fid, caption=cap)
-                    else:
-                        bot.send_video(chat_id, fid, caption=cap)
-
+                    broadcast_queue.put({
+                        "type": "group_single",
+                        "group": chat_id,
+                        "media_type": mtype,
+                        "file_id": fid,
+                        "caption": cap
+                    })
                     time.sleep(0.2)
 
                 except Exception as e:
@@ -1094,7 +1099,20 @@ def broadcast_worker():
             elif job["type"] == "album":
                 _process_album(job["messages"])
                 # external_forward.forward_single(bot, message)
+            elif job["type"] == "group_single":
 
+                if job["media_type"] == "photo":
+                    bot.send_photo(job["group"], job["file_id"], caption=job["caption"])
+                else:
+                    bot.send_video(job["group"], job["file_id"], caption=job["caption"])
+
+                time.sleep(0.2)
+
+
+            elif job["type"] == "group_album":
+
+                bot.send_media_group(job["group"], job["media"])
+                time.sleep(0.5)
 
         except Exception as e:
             print("Broadcast error:", e)
