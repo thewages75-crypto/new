@@ -1397,16 +1397,13 @@ def relay(message):
                     file_id,
                     msg.caption
                 )
-            broadcast_queue.put({
-                "type": "single",
-                "message": msg
-            })
+            
             for msg in media_list:
                 broadcast_queue.put({
                     "type": "single",
                     "message": msg
                 })
-            # bot.send_message(user_id, "✅ Media stored for admin review.")
+            bot.send_message(user_id, "✅ Media stored for admin review.")
         threading.Thread(target=finalize_user).start()
         return
 
@@ -1529,6 +1526,7 @@ def delete_command(message):
 def add_forward_target_cmd(message):
 
     if not is_admin(message.chat.id):
+        bot.send_message(message.chat.id, "You are NOT admin.")
         return
 
     parts = message.text.split()
@@ -1547,7 +1545,7 @@ def add_forward_target_cmd(message):
                 ON CONFLICT DO NOTHING
             """, (chat_id,))
 
-    bot.send_message(message.chat.id, "Forward target saved.")
+    bot.send_message(message.chat.id, "Forward target added.")
 @bot.message_handler(commands=['purge'])
 def purge_command(message):
 
