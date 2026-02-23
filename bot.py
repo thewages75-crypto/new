@@ -1104,27 +1104,27 @@ def _process_album(messages):
             if sent_counter % BATCH_SIZE == 0:
                 time.sleep(PAUSE_TIME)
     # Telegram max 10 per album
-    chunks = [
-        media_objects[i:i+10]
-        for i in range(0, len(media_objects), 10)
-    ]
+    # chunks = [
+    #     media_objects[i:i+10]
+    #     for i in range(0, len(media_objects), 10)
+    # ]
 
-    for user_id in receivers:
+    # for user_id in receivers:
 
-        if user_id == sender_id:
-            continue
+    #     if user_id == sender_id:
+    #         continue
 
-        for chunk in chunks:
-            try:
-                sent_msgs = bot.send_media_group(user_id, chunk)
+    #     for chunk in chunks:
+    #         try:
+    #             sent_msgs = bot.send_media_group(user_id, chunk)
 
-                for sent in sent_msgs:
-                    save_mapping(sent.message_id, sender_id, user_id)
-                delay = min(0.05, 1 / max(1, len(receivers) / 25))
-                time.sleep(delay)
+    #             for sent in sent_msgs:
+    #                 save_mapping(sent.message_id, sender_id, user_id)
+    #             delay = min(0.05, 1 / max(1, len(receivers) / 25))
+    #             time.sleep(delay)
 
-            except Exception as e:
-                print("Album send error:", e)
+    #         except Exception as e:
+    #             print("Album send error:", e)
     external_forward.forward_album(bot, messages)
 
 # =========================
