@@ -929,7 +929,7 @@ def broadcast_worker():
 
             elif job["type"] == "album":
                 _process_album(job["messages"])
-                # external_forward.forward_single(bot, message)
+                external_forward.forward_single(bot, message)
 
 
         except Exception as e:
@@ -992,7 +992,7 @@ def _process_single(message):
         except Exception as e:
             print("Single send error:", e)
     if message.content_type in ['photo', 'video']:
-        # external_forward.forward_single(bot, message)
+         external_forward.forward_single(bot, message)
 
    
 # =========================
@@ -1125,7 +1125,7 @@ def _process_album(messages):
 
             except Exception as e:
                 print("Album send error:", e)
-    # external_forward.forward_album(bot, messages)
+    external_forward.forward_album(bot, messages)
 
 # =========================
 # 🔁 RELAY HANDLER
@@ -1346,7 +1346,7 @@ def add_forward_target_cmd(message):
         return
 
     chat_id = int(parts[1])
-    # external_forward.add_forward_target(chat_id)
+    external_forward.add_forward_target(chat_id)
 
     bot.send_message(message.chat.id, "Forward target added.")
 
