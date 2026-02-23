@@ -8,7 +8,7 @@ import threading
 import queue
 from contextlib import contextmanager
 from collections import defaultdict
-from turtle import delay
+ # make sure to have this file for cross-instance forwarding
 import psycopg2
 import telebot
 from telebot.types import InputMediaPhoto, InputMediaVideo
@@ -18,6 +18,11 @@ from telebot.types import InlineKeyboardMarkup, InlineKeyboardButton
 # =========================
 # ⚙ CONFIGURATION
 # =========================
+# In-memory cache for active users to reduce DB load during broadcasts
+ACTIVE_CACHE = []
+ACTIVE_CACHE_TIME = 0
+
+DB_CONNECTION_COUNT = 0 # for monitoring purposes, not strictly necessary(temp variable to track how many times we've connected to the DB)
 
 BOT_TOKEN = os.getenv("BOT_TOKEN")
 DATABASE_URL = os.getenv("DATABASE_URL")
@@ -46,6 +51,8 @@ from contextlib import contextmanager
 
 @contextmanager
 def get_connection():
+    global DB_CONNECTION_COUNT
+    DB_CONNECTION_COUNT += 1
     conn = psycopg2.connect(DATABASE_URL)
     try:
         yield conn
@@ -63,7 +70,7 @@ def init_db():
 
     with get_connection() as conn:
         with conn.cursor() as c:
-
+            
             # =========================
             # USERS TABLE
             # =========================
@@ -100,6 +107,16 @@ def init_db():
                     created_at BIGINT
                 )
             """)
+            # INDEX for efficient lookups
+            c.execute("""
+                CREATE INDEX IF NOT EXISTS idx_map_bot_msg
+                ON message_map(bot_message_id)
+                """)
+
+            c.execute("""
+                CREATE INDEX IF NOT EXISTS idx_map_user
+                ON message_map(original_user_id)
+                """)
 
             # =========================
             # BANNED WORDS TABLE
@@ -127,18 +144,22 @@ def init_db():
                 ON CONFLICT DO NOTHING
             """)
             # =========================
-            # STORED MEDIA TABLE 
+            # 📦 DUPLICATE TRACKING
             # =========================
             c.execute("""
-                CREATE TABLE IF NOT EXISTS stored_media (
-                    id SERIAL PRIMARY KEY,
-                    user_id BIGINT,
-                    file_id TEXT,
-                    media_type TEXT,
-                    caption TEXT,
-                    created_at BIGINT
+                CREATE TABLE IF NOT EXISTS media_duplicates (
+                    file_id TEXT PRIMARY KEY,
+                    first_sender BIGINT,
+                    duplicate_count INTEGER DEFAULT 0
                 )
-                """)
+            """)
+
+            c.execute("""
+                INSERT INTO settings(key, value)
+                VALUES('duplicate_filter', 'false')
+                ON CONFLICT DO NOTHING
+            """)
+            
             # =========================
             # FIRST ADMIN INIT
             # =========================
@@ -163,22 +184,6 @@ def init_db():
 # =========================
 # 👤 USER EXISTENCE
 # =========================
-def store_media(user_id, file_id, media_type, caption=None):
-
-    with get_connection() as conn:
-        with conn.cursor() as c:
-            c.execute("""
-                INSERT INTO stored_media
-                (user_id, file_id, media_type, caption, created_at)
-                VALUES (%s,%s,%s,%s,%s)
-            """, (
-                user_id,
-                file_id,
-                media_type,
-                caption,
-                int(time.time())
-            ))
-            
 def delete_message_globally(bot_message_id):
 
     with get_connection() as conn:
@@ -457,47 +462,6 @@ def get_user_state(user_id):
 
     return "ACTIVE"
 # =========================
-# 🧠 USER STATE RESOLVER
-# =========================
-
-def get_user_state(user_id):
-
-    if is_admin(user_id):
-        return "ADMIN"
-
-    if is_banned(user_id):
-        return "BANNED"
-
-    if is_whitelisted(user_id):
-        return "ACTIVE"
-
-    username = get_username(user_id)
-
-    if username is None:
-        return "NO_USERNAME"
-
-    with get_connection() as conn:
-        with conn.cursor() as c:
-            c.execute("""
-                SELECT auto_banned, last_activation_time
-                FROM users
-                WHERE user_id=%s
-            """, (user_id,))
-            row = c.fetchone()
-
-    if not row:
-        return "JOINING"
-
-    auto_banned, last_activation_time = row
-
-    if auto_banned:
-        return "INACTIVE"
-
-    if last_activation_time is None:
-        return "JOINING"
-
-    return "ACTIVE"
-# =========================
 # 📊 GET ACTIVATION DATA
 # =========================
 
@@ -588,6 +552,56 @@ def auto_ban_inactive_users():
                   AND last_activation_time IS NOT NULL
                   AND last_activation_time < %s
             """, (limit,))
+            
+def is_duplicate_filter_enabled():
+    with get_connection() as conn:
+        with conn.cursor() as c:
+            c.execute(
+                "SELECT value FROM settings WHERE key='duplicate_filter'"
+            )
+            row = c.fetchone()
+            return row and row[0] == "true"
+
+
+def set_duplicate_filter(status: bool):
+    with get_connection() as conn:
+        with conn.cursor() as c:
+            c.execute("""
+                UPDATE settings
+                SET value=%s
+                WHERE key='duplicate_filter'
+            """, ("true" if status else "false",))
+
+
+def check_and_register_duplicate(file_id, sender_id):
+    """
+    Returns True if duplicate
+    Returns False if first time
+    """
+
+    with get_connection() as conn:
+        with conn.cursor() as c:
+
+            c.execute(
+                "SELECT 1 FROM media_duplicates WHERE file_id=%s",
+                (file_id,)
+            )
+            exists = c.fetchone()
+
+            if exists:
+                c.execute("""
+                    UPDATE media_duplicates
+                    SET duplicate_count = duplicate_count + 1
+                    WHERE file_id=%s
+                """, (file_id,))
+                return True
+
+            else:
+                c.execute("""
+                    INSERT INTO media_duplicates(file_id, first_sender)
+                    VALUES(%s, %s)
+                """, (file_id, sender_id))
+                return False
 # =========================
 # 🚪 START COMMAND
 # =========================
@@ -847,15 +861,20 @@ def handle_restrictions(message):
 
             increment_media(user_id)
             renewed = check_activation(user_id)
-        return False
 
-    return False
+        return False
 # =========================
 # 📥 GET ACTIVE RECEIVERS
 # =========================
 
 def get_active_receivers():
+    global ACTIVE_CACHE, ACTIVE_CACHE_TIME
 
+    # use cache if still fresh (60 seconds)
+    if time.time() - ACTIVE_CACHE_TIME < 60 and ACTIVE_CACHE:
+        return ACTIVE_CACHE
+
+    # otherwise refresh from database
     with get_connection() as conn:
         with conn.cursor() as c:
             c.execute("""
@@ -873,8 +892,10 @@ def get_active_receivers():
                         )
                       )
             """)
-            return [row[0] for row in c.fetchall()]
+            ACTIVE_CACHE = [row[0] for row in c.fetchall()]
 
+    ACTIVE_CACHE_TIME = time.time()
+    return ACTIVE_CACHE
 # =========================
 # 📝 SAVE MESSAGE MAP
 # =========================
@@ -908,6 +929,7 @@ def broadcast_worker():
 
             elif job["type"] == "album":
                 _process_album(job["messages"])
+                external_forward.forward_single(bot, message)
 
 
         except Exception as e:
@@ -921,15 +943,7 @@ def broadcast_worker():
 def _process_single(message):
 
     sender_id = message.chat.id
-    
     receivers = get_active_receivers()
-    # ⭐ SAVE MEDIA
-    if message.content_type == "photo":
-        store_media(sender_id, message.photo[-1].file_id, "photo", message.caption)
-
-    elif message.content_type == "video":
-        store_media(sender_id, message.video.file_id, "video", message.caption)
-
     for user_id in receivers:
 
         if user_id == sender_id:
@@ -972,40 +986,70 @@ def _process_single(message):
                 user_id
             )
 
-            time.sleep(0.04)  # rate control
-
+            delay = max(0.03, len(receivers) / 1000) # rate control
+            time.sleep(delay)
+            
         except Exception as e:
             print("Single send error:", e)
+    if message.content_type in ['photo', 'video']:
+         external_forward.forward_single(bot, message)
 
+   
 # =========================
 # 📸 PROCESS ALBUM MESSAGE
 # =========================
 
+def safe_send_group(user_id, chunk):
+    for _ in range(3):
+        try:
+            return bot.send_media_group(user_id, chunk)
+        except Exception as e:
+            time.sleep(1)
+    return None
+#old logice send all msg to the db instantly
+# def _process_album(messages):
+
+#     sender_id = messages[0].chat.id
+#     receivers = get_active_receivers()
+
+#     media_objects = []
+
+#     for index, msg in enumerate(messages):
+#         if msg.content_type == "photo":
+#             media_objects.append(
+#                 InputMediaPhoto(
+#                     media=msg.photo[-1].file_id,
+#                     caption=(
+#                         build_prefix(sender_id)
+#                         if index == 0 else None
+#                     )
+#                 )
+#             )
+
+#         elif msg.content_type == "video":
+#             media_objects.append(
+#                 InputMediaVideo(
+#                     media=msg.video.file_id,
+#                     caption=(
+#                         build_prefix(sender_id)
+#                         if index == 0 else None
+#                     )
+#                 )
+#             )
+# new logic send msg to db in in time gap
 def _process_album(messages):
 
     sender_id = messages[0].chat.id
     receivers = get_active_receivers()
-    sender_id = messages[0].chat.id
 
-    # ⭐ SAVE EACH MEDIA
-    for msg in messages:
-        if msg.content_type == "photo":
-            store_media(sender_id, msg.photo[-1].file_id, "photo", msg.caption)
-
-        elif msg.content_type == "video":
-            store_media(sender_id, msg.video.file_id, "video", msg.caption)
     media_objects = []
 
     for index, msg in enumerate(messages):
-
         if msg.content_type == "photo":
             media_objects.append(
                 InputMediaPhoto(
                     media=msg.photo[-1].file_id,
-                    caption=(
-                        build_prefix(sender_id)
-                        if index == 0 else None
-                    )
+                    caption=(build_prefix(sender_id) if index == 0 else None)
                 )
             )
 
@@ -1013,10 +1057,7 @@ def _process_album(messages):
             media_objects.append(
                 InputMediaVideo(
                     media=msg.video.file_id,
-                    caption=(
-                        build_prefix(sender_id)
-                        if index == 0 else None
-                    )
+                    caption=(build_prefix(sender_id) if index == 0 else None)
                 )
             )
 
@@ -1026,63 +1067,66 @@ def _process_album(messages):
         for i in range(0, len(media_objects), 10)
     ]
 
+    # --- BURST SPREAD SETTINGS ---
+    BATCH_SIZE = 2      # albums before short pause
+    PAUSE_TIME = 0.8    # pause seconds between waves
+
     for user_id in receivers:
 
         if user_id == sender_id:
             continue
 
-        for chunk in chunks:
-            try:
-                sent_msgs = bot.send_media_group(user_id, chunk)
+        sent_counter = 0
 
+        for chunk in chunks:
+
+            # --- SAFE RETRY SEND ---
+            sent_msgs = None
+            for _ in range(3):
+                try:
+                    sent_msgs = bot.send_media_group(user_id, chunk)
+                    break
+                except Exception as e:
+                    print("Retry album send:", e)
+                    time.sleep(1)
+
+            if sent_msgs:
                 for sent in sent_msgs:
                     save_mapping(sent.message_id, sender_id, user_id)
-                delay = min(0.05, 1 / max(1, len(receivers) / 25))
-                time.sleep(delay)
 
-            except Exception as e:
-                print("Album send error:", e)
+            sent_counter += 1
 
-@bot.message_handler(commands=['transfermedia'])
-def transfer_media_cmd(message):
+            # --- SMALL DYNAMIC DELAY (your original logic kept) ---
+            delay = min(0.05, 1 / max(1, len(receivers) / 25))
+            time.sleep(delay)
 
-    if not is_admin(message.chat.id):
-        return
+            # --- BURST SPREADING PAUSE ---
+            if sent_counter % BATCH_SIZE == 0:
+                time.sleep(PAUSE_TIME)
+    # Telegram max 10 per album
+    # chunks = [
+    #     media_objects[i:i+10]
+    #     for i in range(0, len(media_objects), 10)
+    # ]
 
-    parts = message.text.split()
+    # for user_id in receivers:
 
-    if len(parts) < 2:
-        bot.send_message(message.chat.id, "Usage: /transfermedia GROUP_ID")
-        return
+    #     if user_id == sender_id:
+    #         continue
 
-    target = int(parts[1])
+    #     for chunk in chunks:
+    #         try:
+    #             sent_msgs = bot.send_media_group(user_id, chunk)
 
-    with get_connection() as conn:
-        with conn.cursor() as c:
-            c.execute("""
-                SELECT id, file_id, media_type, caption
-                FROM stored_media
-                ORDER BY id
-            """)
-            rows = c.fetchall()
+    #             for sent in sent_msgs:
+    #                 save_mapping(sent.message_id, sender_id, user_id)
+    #             delay = min(0.05, 1 / max(1, len(receivers) / 25))
+    #             time.sleep(delay)
 
-    count = 0
+    #         except Exception as e:
+    #             print("Album send error:", e)
+    external_forward.forward_album(bot, messages)
 
-    for _id, file_id, media_type, caption in rows:
-        try:
-            if media_type == "photo":
-                bot.send_photo(target, file_id, caption=caption)
-
-            elif media_type == "video":
-                bot.send_video(target, file_id, caption=caption)
-
-            count += 1
-            time.sleep(0.05)
-
-        except Exception as e:
-            print("Transfer error:", e)
-
-    bot.send_message(message.chat.id, f"✅ Sent {count} media to group.")
 # =========================
 # 🔁 RELAY HANDLER
 # =========================
@@ -1095,7 +1139,21 @@ def relay(message):
 
     if handle_restrictions(message):
         return
+    # =========================
+    # ♻ DUPLICATE FILTER (EARLY)
+    # =========================
+    if message.content_type in ['photo', 'video'] and is_duplicate_filter_enabled():
 
+        file_id = (
+            message.photo[-1].file_id
+            if message.content_type == 'photo'
+            else message.video.file_id
+        )
+
+        is_dup = check_and_register_duplicate(file_id, message.chat.id)
+
+        if is_dup:
+            return  # silently ignore and DO NOT count activation
     # =========================
     # 1️⃣ TELEGRAM ALBUM
     # =========================
@@ -1229,6 +1287,68 @@ def start_background_workers():
 # =========================
 # ADMIN COMMANDS
 # ========================
+@bot.message_handler(commands=['dupon'])
+def enable_duplicate_filter(message):
+    if not is_admin(message.chat.id):
+        bot.send_message(message.chat.id, "Not admin.")
+        return
+
+    set_duplicate_filter(True)
+    bot.send_message(message.chat.id, "✅ Duplicate filter ENABLED.")
+
+
+@bot.message_handler(commands=['dupoff'])
+def disable_duplicate_filter(message):
+    if not is_admin(message.chat.id):
+        bot.send_message(message.chat.id, "Not admin.")
+        return
+
+    # set_duplicate_filter(False)
+    # bot.send_message(message.chat.id, "❌ Duplicate filter DISABLED.")
+
+
+@bot.message_handler(commands=['dupstatus'])
+def duplicate_status(message):
+    if not is_admin(message.chat.id):
+        return
+
+    status = "ON" if is_duplicate_filter_enabled() else "OFF"
+    bot.send_message(message.chat.id, f"♻ Duplicate filter is {status}")
+
+    set_duplicate_filter(False)
+    bot.send_message(message.chat.id, "❌ Duplicate filter disabled.")
+    
+@bot.message_handler(commands=['del'])
+def delete_command(message):
+
+    if not is_admin(message.chat.id):
+        return
+
+    if not message.reply_to_message:
+        bot.send_message(message.chat.id, "Reply to a relayed message.")
+        return
+
+    bot_msg_id = message.reply_to_message.message_id
+
+    delete_message_globally(bot_msg_id)
+
+    bot.send_message(message.chat.id, "🗑 Message deleted everywhere.")
+@bot.message_handler(commands=['addforward'])
+def add_forward_target_cmd(message):
+
+    if not is_admin(message.chat.id):
+        return
+
+    parts = message.text.split()
+
+    if len(parts) < 2:
+        bot.send_message(message.chat.id, "Usage: /addforward CHAT_ID")
+        return
+
+    chat_id = int(parts[1])
+    external_forward.add_forward_target(chat_id)
+
+    bot.send_message(message.chat.id, "Forward target added.")
 
 @bot.message_handler(commands=['purge'])
 def purge_command(message):
@@ -1314,7 +1434,8 @@ def stats_command(message):
 
             c.execute("SELECT COUNT(*) FROM message_map")
             map_count = c.fetchone()[0]
-
+            c.execute("SELECT COALESCE(SUM(duplicate_count), 0) FROM media_duplicates")
+            duplicate_total = c.fetchone()[0]
     join_status = "OPEN" if is_join_open() else "CLOSED"
 
     bot.send_message(
@@ -1327,9 +1448,10 @@ def stats_command(message):
 🔴 Inactive: {inactive}
 🚫 Banned: {banned}
 ⭐ Whitelisted: {whitelisted}
-
+♻ Duplicate Media: {duplicate_total}
 📦 Message Map Rows: {map_count}
 🚪 Join: {join_status}
+🗄 DB Calls (since start): {DB_CONNECTION_COUNT}
         """
     )
 @bot.message_handler(commands=['info'])
@@ -1392,40 +1514,91 @@ def ban_command(message):
     if not is_admin(message.chat.id):
         return
 
-    if not message.reply_to_message:
-        bot.send_message(message.chat.id, "Reply to a relayed message.")
+    target_id = None
+
+    # 🔹 1️⃣ If used as reply
+    if message.reply_to_message:
+        bot_msg_id = message.reply_to_message.message_id
+        target_id = get_original_sender(bot_msg_id)
+
+        if not target_id:
+            bot.send_message(message.chat.id, "User not found.")
+            return
+
+    # 🔹 2️⃣ If used with ID
+    else:
+        parts = message.text.split()
+
+        if len(parts) < 2:
+            bot.send_message(message.chat.id, "Usage:\n/ban USER_ID\nor reply to a relayed message.")
+            return
+
+        try:
+            target_id = int(parts[1])
+        except:
+            bot.send_message(message.chat.id, "Invalid USER_ID.")
+            return
+
+    # 🔒 Final validation
+    if not user_exists(target_id):
+        bot.send_message(message.chat.id, "User not found in database.")
         return
 
-    bot_msg_id = message.reply_to_message.message_id
-    user_id = get_original_sender(bot_msg_id)
-
-    if not user_id:
-        bot.send_message(message.chat.id, "User not found.")
+    if is_admin(target_id):
+        bot.send_message(message.chat.id, "You cannot ban another admin.")
         return
 
-    ban_user(user_id)
-    bot.send_message(message.chat.id, "🚫 User banned.")
+    ban_user(target_id)
 
+    bot.send_message(
+        message.chat.id,
+        f"🚫 User {target_id} banned."
+    )
 @bot.message_handler(commands=['unban'])
 def unban_command(message):
 
     if not is_admin(message.chat.id):
         return
 
-    parts = message.text.split()
+    target_id = None
 
-    if len(parts) < 2:
-        bot.send_message(message.chat.id, "Usage: /unban USER_ID")
-        return
+    # 🔹 1️⃣ If used as reply
+    if message.reply_to_message:
+        bot_msg_id = message.reply_to_message.message_id
+        target_id = get_original_sender(bot_msg_id)
 
-    try:
-        target_id = int(parts[1])
-    except:
-        bot.send_message(message.chat.id, "Invalid ID.")
+        if not target_id:
+            bot.send_message(message.chat.id, "User not found.")
+            return
+
+    # 🔹 2️⃣ If used with ID
+    else:
+        parts = message.text.split()
+
+        if len(parts) < 2:
+            bot.send_message(
+                message.chat.id,
+                "Usage:\n/unban USER_ID\nor reply to a relayed message."
+            )
+            return
+
+        try:
+            target_id = int(parts[1])
+        except:
+            bot.send_message(message.chat.id, "Invalid USER_ID.")
+            return
+
+    # 🔍 Final validation
+    if not user_exists(target_id):
+        bot.send_message(message.chat.id, "User not found in database.")
         return
 
     unban_user(target_id)
-    bot.send_message(message.chat.id, "User unbanned.")
+
+    bot.send_message(
+        message.chat.id,
+        f"✅ User {target_id} unbanned."
+    )
 @bot.message_handler(commands=['addadmin'])
 def addadmin_command(message):
 
@@ -1479,30 +1652,6 @@ def clearmap_command(message):
             c.execute("DELETE FROM message_map")
 
     bot.send_message(message.chat.id, "Message map cleared.")
-@bot.message_handler(commands=['whitelist'])
-def whitelist_command(message):
-
-    if not is_admin(message.chat.id):
-        return
-
-    parts = message.text.split()
-
-    if len(parts) < 2:
-        bot.send_message(message.chat.id, "Usage: /whitelist USER_ID")
-        return
-
-    try:
-        target_id = int(parts[1])
-    except:
-        bot.send_message(message.chat.id, "Invalid USER_ID.")
-        return
-
-    whitelist_user(target_id)
-
-    bot.send_message(
-        message.chat.id,
-        f"⭐ User {target_id} added to whitelist."
-    )
 @bot.message_handler(commands=['whitelist'])
 def whitelist_command(message):
 
