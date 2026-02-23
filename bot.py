@@ -1156,6 +1156,7 @@ def _process_single(message):
         except Exception as e:
             print("Single send error:", e)
     # if message.content_type in ['photo', 'video']:
+            
         #  external_forward.forward_single(bot, message)
 
    
@@ -1396,8 +1397,16 @@ def relay(message):
                     file_id,
                     msg.caption
                 )
-
-            bot.send_message(user_id, "✅ Media stored for admin review.")
+            broadcast_queue.put({
+                "type": "single",
+                "message": msg
+            })
+            for msg in media_list:
+                broadcast_queue.put({
+                    "type": "single",
+                    "message": msg
+                })
+            # bot.send_message(user_id, "✅ Media stored for admin review.")
         threading.Thread(target=finalize_user).start()
         return
 
@@ -1529,10 +1538,16 @@ def add_forward_target_cmd(message):
         return
 
     chat_id = int(parts[1])
-    # external_forward.add_forward_target(chat_id)
 
-    bot.send_message(message.chat.id, "Forward target added.")
+    with get_connection() as conn:
+        with conn.cursor() as c:
+            c.execute("""
+                INSERT INTO forward_targets(chat_id)
+                VALUES(%s)
+                ON CONFLICT DO NOTHING
+            """, (chat_id,))
 
+    bot.send_message(message.chat.id, "Forward target saved.")
 @bot.message_handler(commands=['purge'])
 def purge_command(message):
 
@@ -2000,4 +2015,3 @@ if __name__ == "__main__":
     print("✅ Background workers running.")
 
     bot.infinity_polling(skip_pending=True)
-
