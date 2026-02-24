@@ -62,8 +62,30 @@ def admin_panel_markup():
     markup.add(InlineKeyboardButton("📊 Bot Stats", callback_data="admin_stats"))
     markup.add(InlineKeyboardButton("👥 Total Users", callback_data="admin_users"))
     markup.add(InlineKeyboardButton("📦 Total Files", callback_data="admin_files"))
+    markup.add(InlineKeyboardButton("👤 View Users", callback_data="admin_userlist_0"))
     markup.add(InlineKeyboardButton("🔙 Back", callback_data="menu_main"))
     return markup
+USERS_PER_PAGE = 10
+
+def get_users_page(page):
+    conn = get_connection()
+    cur = conn.cursor()
+
+    offset = page * USERS_PER_PAGE
+
+    cur.execute("""
+        SELECT user_id, username
+        FROM users
+        ORDER BY joined_at DESC
+        LIMIT %s OFFSET %s
+    """, (USERS_PER_PAGE, offset))
+
+    users = cur.fetchall()
+
+    cur.close()
+    conn.close()
+
+    return users
 def get_total_storage():
     conn = get_connection()
     cur = conn.cursor()
@@ -397,6 +419,31 @@ def callback_handler(call):
             call.message.chat.id,
             call.message.message_id,
             reply_markup=admin_panel_markup()
+        )
+    elif data.startswith("admin_userlist_"):
+        if call.from_user.id != ADMIN_ID:
+            bot.answer_callback_query(call.id, "Unauthorized")
+            return
+        _, page = data.split("_")
+        page = int(page)
+        users = get_users_page(page)
+
+        text = "👤 User List:\n\n"
+        for user_id, username in users:
+            text += f"• {username or 'N/A'} (ID: {user_id})\n"
+
+        markup = InlineKeyboardMarkup()
+        if page > 0:
+            markup.add(InlineKeyboardButton("⬅ Prev", callback_data=f"admin_userlist_{page-1}"))
+        if len(users) == USERS_PER_PAGE:
+            markup.add(InlineKeyboardButton("Next ➡", callback_data=f"admin_userlist_{page+1}"))
+        markup.add(InlineKeyboardButton("🔙 Back", callback_data="admin_panel"))
+
+        bot.edit_message_text(
+            text,
+            call.message.chat.id,
+            call.message.message_id,
+            reply_markup=markup
         )
     elif data == "menu_files":
         bot.edit_message_text(
