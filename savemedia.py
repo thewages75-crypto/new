@@ -64,6 +64,14 @@ def admin_panel_markup():
     markup.add(InlineKeyboardButton("📦 Total Files", callback_data="admin_files"))
     markup.add(InlineKeyboardButton("🔙 Back", callback_data="menu_main"))
     return markup
+def get_total_storage():
+    conn = get_connection()
+    cur = conn.cursor()
+    cur.execute("SELECT COALESCE(SUM(file_size), 0) FROM stored_media")
+    total_size = cur.fetchone()[0]
+    cur.close()
+    conn.close()
+    return total_size
 # ================= DB HELPERS ================= #
 def get_storage_used(user_id):
     conn = get_connection()
@@ -351,7 +359,8 @@ def callback_handler(call):
         bot.edit_message_text(
             f"📊 Bot Statistics\n\n"
             f"👥 Total Users: {total_files}\n"
-            f"📦 Total Files: {total_users}",
+            f"📦 Total Files: {total_users}\n",
+            f"💾 Total Storage Used: {total_size}"
             call.message.chat.id,
             call.message.message_id,
             reply_markup=admin_panel_markup()
@@ -384,7 +393,6 @@ def callback_handler(call):
         conn.close()
         bot.edit_message_text(
             f"📦 Total Files: {total_files}",
-            f"total size: {format_size(get_storage_used(call.from_user.id))}",
             call.message.chat.id,
             call.message.message_id,
             reply_markup=admin_panel_markup()
