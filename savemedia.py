@@ -351,7 +351,7 @@ def callback_handler(call):
         bot.edit_message_text(
             f"📊 Bot Statistics\n\n"
             f"👥 Total Users: {total_files}\n"
-            f"📦 Total Files: {total_files}",
+            f"📦 Total Files: {total_users}",
             call.message.chat.id,
             call.message.message_id,
             reply_markup=admin_panel_markup()
