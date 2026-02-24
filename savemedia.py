@@ -607,58 +607,58 @@ def callback_handler(call):
             reply_markup=markup
         )
 
-    def sender():
+def sender():
 
-        batch = []
+    batch = []
 
-        def flush():
+    def flush():
 
-            nonlocal batch
+        nonlocal batch
 
-            if not batch:
+        if not batch:
+            return
+
+        if len(batch) == 1:
+            m = batch[0]
+
+            if isinstance(m, InputMediaPhoto):
+                bot.send_photo(group_id, m.media, caption=m.caption)
+
+            elif isinstance(m, InputMediaVideo):
+                bot.send_video(group_id, m.media, caption=m.caption)
+
+            elif isinstance(m, InputMediaDocument):
+                bot.send_document(group_id, m.media, caption=m.caption)
+
+            elif isinstance(m, InputMediaAudio):
+                bot.send_audio(group_id, m.media, caption=m.caption)
+
+        else:
+            bot.send_media_group(group_id, batch)
+
+            batch = []
+            time.sleep(1)   # ⭐ one second per send
+
+        for file_id, t, caption in rows:
+            if admin_active_jobs[call.from_user.id]["cancel"]:
+                bot.send_message(call.message.chat.id, "🛑 Cancelled")
                 return
 
-            if len(batch) == 1:
-                m = batch[0]
+            if t == "photo":
+                batch.append(InputMediaPhoto(file_id, caption=caption))
+            elif t == "video":
+                batch.append(InputMediaVideo(file_id, caption=caption))
+            elif t == "document":
+                batch.append(InputMediaDocument(file_id, caption=caption))
+            elif t == "audio":
+                batch.append(InputMediaAudio(file_id, caption=caption))
 
-                if isinstance(m, InputMediaPhoto):
-                    bot.send_photo(group_id, m.media, caption=m.caption)
+            if len(batch) == 10:
+                flush()
 
-                elif isinstance(m, InputMediaVideo):
-                    bot.send_video(group_id, m.media, caption=m.caption)
+        flush()
 
-                elif isinstance(m, InputMediaDocument):
-                    bot.send_document(group_id, m.media, caption=m.caption)
-
-                elif isinstance(m, InputMediaAudio):
-                    bot.send_audio(group_id, m.media, caption=m.caption)
-
-            else:
-                bot.send_media_group(group_id, batch)
-
-                batch = []
-                time.sleep(1)   # ⭐ one second per send
-
-            for file_id, t, caption in rows:
-                if admin_active_jobs[call.from_user.id]["cancel"]:
-                    bot.send_message(call.message.chat.id, "🛑 Cancelled")
-                    return
-
-                if t == "photo":
-                    batch.append(InputMediaPhoto(file_id, caption=caption))
-                elif t == "video":
-                    batch.append(InputMediaVideo(file_id, caption=caption))
-                elif t == "document":
-                    batch.append(InputMediaDocument(file_id, caption=caption))
-                elif t == "audio":
-                    batch.append(InputMediaAudio(file_id, caption=caption))
-
-                if len(batch) == 10:
-                    flush()
-
-            flush()
-
-            bot.send_message(call.message.chat.id, "✅ Done")
+        bot.send_message(call.message.chat.id, "✅ Done")
 
         threading.Thread(target=sender).start()
 # ================= ADMIN STATS ================= #
