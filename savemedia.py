@@ -68,21 +68,20 @@ def save_user(user):
 def save_media(user_id, file_id, file_type, caption):
     conn = get_connection()
     cur = conn.cursor()
-    try:
-        cur.execute(
-            "INSERT INTO stored_media (user_id, file_id, file_type, caption) VALUES (%s, %s, %s, %s)",
-            (user_id, file_id, file_type, caption)
-        )
-        conn.commit()
-        cur.close()
-        conn.close()
-        return True  # saved
-    except psycopg2.errors.UniqueViolation:
-        conn.rollback()
-        cur.close()
-        conn.close()
-        return False  # duplicate
 
+    cur.execute("""
+        INSERT INTO stored_media (user_id, file_id, file_type, caption)
+        VALUES (%s, %s, %s, %s)
+        ON CONFLICT (user_id, file_id) DO NOTHING
+        RETURNING id;
+    """, (user_id, file_id, file_type, caption))
+
+    result = cur.fetchone()
+    conn.commit()
+    cur.close()
+    conn.close()
+
+    return result is not None
 def get_total_files(user_id):
     conn = get_connection()
     cur = conn.cursor()
