@@ -17,6 +17,7 @@ FILES_PER_PAGE = 5
 bot = telebot.TeleBot(BOT_TOKEN)
 session_lock = threading.Lock()
 admin_send_state = {}
+admin_active_jobs = {}
 # ================= DATABASE ================= #
 
 def get_connection():
@@ -577,6 +578,10 @@ def callback_handler(call):
             "📩 Forward ANY message from the target group\n\n"
             "OR send the group ID."
         )
+    elif data == "admin_cancel_send":
+
+        if call.from_user.id in admin_active_jobs:
+            admin_active_jobs[call.from_user.id]["cancel"] = True
     elif data == "admin_confirm_send":
 
         if call.from_user.id not in admin_send_state:
@@ -591,41 +596,93 @@ def callback_handler(call):
             bot.answer_callback_query(call.id, "Send group first")
             return
 
+        # prevent duplicate running job
+        if call.from_user.id in admin_active_jobs:
+            bot.answer_callback_query(call.id, "Already sending")
+            return
+
+        bot.send_message(call.message.chat.id, "📥 Preparing media list...")
+
         conn = get_connection()
         cur = conn.cursor()
-
         cur.execute("""
-            SELECT file_id, file_type, caption
+            SELECT id, file_id, file_type, caption
             FROM stored_media
             WHERE user_id=%s
             ORDER BY id ASC
         """, (user_id,))
-
         rows = cur.fetchall()
         cur.close()
         conn.close()
 
-        bot.send_message(call.message.chat.id, f"🚀 Sending {len(rows)} files...")
+        total = len(rows)
 
-        for file_id, file_type, caption in rows:
+        # mark job active
+        admin_active_jobs[call.from_user.id] = {
+            "cancel": False
+        }
 
-            try:
-                if file_type == "photo":
-                    bot.send_photo(group_id, file_id, caption=caption)
+        # cancel button
+        markup = InlineKeyboardMarkup()
+        markup.add(
+            InlineKeyboardButton("🛑 CANCEL SENDING", callback_data="admin_cancel_send")
+        )
 
-                elif file_type == "video":
-                    bot.send_video(group_id, file_id, caption=caption)
+        bot.send_message(
+            call.message.chat.id,
+            f"🚀 Sending started\nTotal files: {total}",
+            reply_markup=markup
+        )
 
-                elif file_type == "document":
-                    bot.send_document(group_id, file_id, caption=caption)
+        # BACKGROUND THREAD
+        def sender():
 
-                elif file_type == "audio":
-                    bot.send_audio(group_id, file_id, caption=caption)
+            sent = 0
 
-            except Exception as e:
-                print("Send error:", e)
+            for media_id, file_id, file_type, caption in rows:
 
-        bot.send_message(call.message.chat.id, "✅ Done sending media")
+                # cancel check
+                if admin_active_jobs[call.from_user.id]["cancel"]:
+                    bot.send_message(call.message.chat.id, "🛑 Sending cancelled")
+                    admin_active_jobs.pop(call.from_user.id, None)
+                    return
+
+                try:
+
+                    if file_type == "photo":
+                        bot.send_photo(group_id, file_id, caption=caption)
+
+                    elif file_type == "video":
+                        bot.send_video(group_id, file_id, caption=caption)
+
+                    elif file_type == "document":
+                        bot.send_document(group_id, file_id, caption=caption)
+
+                    elif file_type == "audio":
+                        bot.send_audio(group_id, file_id, caption=caption)
+
+                    sent += 1
+
+                    # progress update every 10 files
+                    if sent % 10 == 0:
+                        bot.send_message(
+                            call.message.chat.id,
+                            f"📤 Progress: {sent}/{total}"
+                        )
+
+                    # anti flood delay
+                    time.sleep(0.05)
+
+                except Exception as e:
+                    print("Send error:", e)
+                    time.sleep(1)
+
+            bot.send_message(call.message.chat.id, "✅ All media sent")
+
+            admin_active_jobs.pop(call.from_user.id, None)
+            admin_send_state.pop(call.from_user.id, None)
+
+        threading.Thread(target=sender).start()
 
         admin_send_state.pop(call.from_user.id, None)
     elif data == "menu_files":
