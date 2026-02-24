@@ -45,6 +45,22 @@ def init_db():
             file_size BIGINT DEFAULT 0
         );
     """)
+    cur.execute("""CREATE TABLE IF NOT EXISTS user_group_map (
+                    id SERIAL PRIMARY KEY,
+                    user_id BIGINT NOT NULL,
+                    group_id BIGINT NOT NULL,
+                    UNIQUE(user_id, group_id)
+                );"""
+                )
+    cur.execute("""CREATE TABLE IF NOT EXISTS transfer_queue (
+                id SERIAL PRIMARY KEY,
+                media_id INTEGER REFERENCES stored_media(id) ON DELETE CASCADE,
+                group_id BIGINT NOT NULL,
+                transferred BOOLEAN DEFAULT FALSE,
+                queued_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+                UNIQUE(media_id, group_id)
+            );""")
+                
 
     cur.execute("CREATE INDEX IF NOT EXISTS idx_user_media ON stored_media(user_id);")
     cur.execute("CREATE INDEX IF NOT EXISTS idx_saved_at ON stored_media(saved_at);")
@@ -54,6 +70,17 @@ def init_db():
     conn.close()
     
 # ================= ADMIN PANEL Helper ================= #
+def get_user_groups(user_id):
+    conn = get_connection()
+    cur = conn.cursor()
+    cur.execute(
+        "SELECT group_id FROM user_group_map WHERE user_id = %s",
+        (user_id,)
+    )
+    rows = cur.fetchall()
+    cur.close()
+    conn.close()
+    return [row[0] for row in rows]
 def admin_panel_text():
     return "🛠 Admin Panel\n\nSelect an option:"
 
@@ -63,6 +90,7 @@ def admin_panel_markup():
     markup.add(InlineKeyboardButton("👥 Total Users", callback_data="admin_users"))
     markup.add(InlineKeyboardButton("📦 Total Files", callback_data="admin_files"))
     markup.add(InlineKeyboardButton("👤 View Users", callback_data="admin_userlist_0"))
+    markup.add(InlineKeyboardButton("🚀 Send Pending", callback_data="admin_send_pending"))
     markup.add(InlineKeyboardButton("🔙 Back", callback_data="menu_main"))
     return markup
 USERS_PER_PAGE = 10
@@ -123,7 +151,7 @@ def save_user(user):
     cur.close()
     conn.close()
 
-def save_media(user_id, file_id, file_type, caption,file_size):
+def save_media(user_id, file_id, file_type, caption, file_size):
     conn = get_connection()
     cur = conn.cursor()
 
@@ -135,12 +163,60 @@ def save_media(user_id, file_id, file_type, caption,file_size):
     """, (user_id, file_id, file_type, caption, file_size))
 
     result = cur.fetchone()
-
     conn.commit()
     cur.close()
     conn.close()
 
-    return result is not None
+    return result[0] if result else None
+def send_pending_media():
+    conn = get_connection()
+    cur = conn.cursor()
+
+    cur.execute("""
+        SELECT tq.id, sm.file_id, sm.file_type, tq.group_id
+        FROM transfer_queue tq
+        JOIN stored_media sm ON sm.id = tq.media_id
+        WHERE tq.transferred = FALSE
+    """)
+
+    rows = cur.fetchall()
+
+    for queue_id, file_id, file_type, group_id in rows:
+        try:
+            if file_type == "photo":
+                bot.send_photo(group_id, file_id)
+            elif file_type == "video":
+                bot.send_video(group_id, file_id)
+            elif file_type == "document":
+                bot.send_document(group_id, file_id)
+            elif file_type == "audio":
+                bot.send_audio(group_id, file_id)
+
+            cur.execute(
+                "UPDATE transfer_queue SET transferred = TRUE WHERE id = %s",
+                (queue_id,)
+            )
+
+        except Exception as e:
+            print("Send error:", e)
+
+    conn.commit()
+    cur.close()
+    conn.close()
+def queue_media_for_groups(media_id, group_ids):
+    conn = get_connection()
+    cur = conn.cursor()
+
+    for group_id in group_ids:
+        cur.execute("""
+            INSERT INTO transfer_queue (media_id, group_id)
+            VALUES (%s, %s)
+            ON CONFLICT (media_id, group_id) DO NOTHING
+        """, (media_id, group_id))
+
+    conn.commit()
+    cur.close()
+    conn.close()
 
 def get_total_files(user_id):
     conn = get_connection()
@@ -252,7 +328,10 @@ def handle_media(message):
         return
 
     result = save_media(message.from_user.id, file_id, file_type, caption, file_size)
-
+    if result:
+        groups = get_user_groups(message.from_user.id)
+        if groups:
+            queue_media_for_groups(result, groups)
     user_id = message.from_user.id
     chat_id = message.chat.id
 
@@ -456,6 +535,13 @@ def callback_handler(call):
             call.message.message_id,
             reply_markup=markup
         )
+    elif data == "admin_send_pending":
+        if call.from_user.id != ADMIN_ID:
+            return
+
+        send_pending_media()
+
+        bot.answer_callback_query(call.id, "Pending media sent")
     elif data == "menu_files":
         bot.edit_message_text(
             "📂 Select Category",
