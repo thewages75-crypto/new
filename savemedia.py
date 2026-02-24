@@ -635,100 +635,107 @@ def callback_handler(call):
         )
 
         # BACKGROUND THREAD
-        def sender():
+        from telebot.types import InputMediaPhoto, InputMediaVideo, InputMediaDocument, InputMediaAudio
 
-            sent = 0
+from telebot.types import (
+    InputMediaPhoto,
+    InputMediaVideo,
+    InputMediaDocument,
+    InputMediaAudio
+)
 
-            for media_id, file_id, file_type, caption in rows:
+def sender():
 
-                # cancel check
-                if admin_active_jobs[call.from_user.id]["cancel"]:
-                    bot.send_message(call.message.chat.id, "🛑 Sending cancelled")
-                    admin_active_jobs.pop(call.from_user.id, None)
-                    return
+    sent = 0
+    batch = []
 
-                try:
+    def flush_batch():
+        """Send current batch either as album or single"""
+        nonlocal batch
 
-                    if file_type == "photo":
-                        bot.send_photo(group_id, file_id, caption=caption)
+        if not batch:
+            return
 
-                    elif file_type == "video":
-                        bot.send_video(group_id, file_id, caption=caption)
+        try:
 
-                    elif file_type == "document":
-                        bot.send_document(group_id, file_id, caption=caption)
+            # If only 1 file → send normally
+            if len(batch) == 1:
 
-                    elif file_type == "audio":
-                        bot.send_audio(group_id, file_id, caption=caption)
+                m = batch[0]
 
-                    sent += 1
+                if isinstance(m, InputMediaPhoto):
+                    bot.send_photo(group_id, m.media, caption=m.caption)
 
-                    # progress update every 10 files
-                    if sent % 10 == 0:
-                        bot.send_message(
-                            call.message.chat.id,
-                            f"📤 Progress: {sent}/{total}"
-                        )
+                elif isinstance(m, InputMediaVideo):
+                    bot.send_video(group_id, m.media, caption=m.caption)
 
-                    # anti flood delay
-                    time.sleep(0.05)
+                elif isinstance(m, InputMediaDocument):
+                    bot.send_document(group_id, m.media, caption=m.caption)
 
-                except Exception as e:
-                    print("Send error:", e)
-                    time.sleep(1)
+                elif isinstance(m, InputMediaAudio):
+                    bot.send_audio(group_id, m.media, caption=m.caption)
 
-            bot.send_message(call.message.chat.id, "✅ All media sent")
+            else:
+                # multiple → send album
+                bot.send_media_group(group_id, batch)
 
+        except Exception as e:
+            print("Send error:", e)
+            time.sleep(1)
+
+        batch = []
+
+
+    for media_id, file_id, file_type, caption in rows:
+
+        # cancel check
+        if admin_active_jobs[call.from_user.id]["cancel"]:
+            bot.send_message(call.message.chat.id, "🛑 Sending cancelled")
             admin_active_jobs.pop(call.from_user.id, None)
-            admin_send_state.pop(call.from_user.id, None)
+            return
 
-        threading.Thread(target=sender).start()
+        try:
 
-        admin_send_state.pop(call.from_user.id, None)
-    elif data == "menu_files":
-        bot.edit_message_text(
-            "📂 Select Category",
-            call.message.chat.id,
-            call.message.message_id,
-            reply_markup=category_menu(call.from_user.id)
-        )
-
-    elif data.startswith("cat_"):
-        _, file_type, page = data.split("_")
-        page = int(page)
-        text, markup = category_page(call.from_user.id, file_type, page)
-        bot.edit_message_text(
-            text,
-            call.message.chat.id,
-            call.message.message_id,
-            reply_markup=markup
-        )
-
-    elif data.startswith("get_"):
-        _, file_type, media_id = data.split("_")
-
-        conn = get_connection()
-        cur = conn.cursor()
-        cur.execute(
-            "SELECT file_id FROM stored_media WHERE id = %s AND user_id = %s",
-            (media_id, call.from_user.id)
-        )
-        result = cur.fetchone()
-        cur.close()
-        conn.close()
-
-        if result:
-            file_id = result[0]
-
+            # build media object
             if file_type == "photo":
-                bot.send_photo(call.message.chat.id, file_id)
+                batch.append(InputMediaPhoto(file_id, caption=caption))
+
             elif file_type == "video":
-                bot.send_video(call.message.chat.id, file_id)
+                batch.append(InputMediaVideo(file_id, caption=caption))
+
             elif file_type == "document":
-                bot.send_document(call.message.chat.id, file_id)
+                batch.append(InputMediaDocument(file_id, caption=caption))
+
             elif file_type == "audio":
-                bot.send_audio(call.message.chat.id, file_id)
-    
+                batch.append(InputMediaAudio(file_id, caption=caption))
+
+            # Telegram album max = 10 files
+            if len(batch) == 10:
+                flush_batch()
+
+            sent += 1
+
+            # progress every 20 files
+            if sent % 20 == 0:
+                bot.send_message(
+                    call.message.chat.id,
+                    f"📤 Progress: {sent}/{total}"
+                )
+
+            # anti-flood safety
+            time.sleep(0.05)
+
+        except Exception as e:
+            print("Loop error:", e)
+            time.sleep(1)
+
+    # send remaining files
+    flush_batch()
+
+    bot.send_message(call.message.chat.id, "✅ All media sent")
+
+    admin_active_jobs.pop(call.from_user.id, None)
+    admin_send_state.pop(call.from_user.id, None)    
 # ================= ADMIN STATS ================= #
 
 @bot.message_handler(commands=['stats'])
