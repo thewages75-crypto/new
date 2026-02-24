@@ -386,135 +386,134 @@ def category_page(user_id, file_type, page):
 
 @bot.callback_query_handler(func=lambda call: True)
 def callback_handler(call):
+
     data = call.data
-    
+
+    # ---------- SAFE EDIT HELPER ----------
+    def safe_edit(text, markup=None):
+        try:
+            bot.edit_message_text(
+                text,
+                call.message.chat.id,
+                call.message.message_id,
+                reply_markup=markup
+            )
+        except:
+            bot.send_message(
+                call.message.chat.id,
+                text,
+                reply_markup=markup
+            )
+
+    # ---------- MAIN MENU ----------
     if data == "menu_main":
-        bot.edit_message_text(
+        safe_edit(
             dashboard_text(call.from_user.id),
-            call.message.chat.id,
-            call.message.message_id,
-            reply_markup=dashboard_markup(call.from_user.id)
+            dashboard_markup(call.from_user.id)
         )
+
+    # ---------- FILE MENU ----------
+    elif data == "menu_files":
+        safe_edit(
+            "📂 Select Category",
+            category_menu(call.from_user.id)
+        )
+
+    # ---------- CATEGORY PAGE ----------
+    elif data.startswith("cat_"):
+        _, file_type, page = data.split("_")
+        text, markup = category_page(call.from_user.id, file_type, int(page))
+        safe_edit(text, markup)
+
+    # ---------- GET FILE ----------
+    elif data.startswith("get_"):
+
+        _, file_type, media_id = data.split("_")
+
+        conn = get_connection()
+        cur = conn.cursor()
+        cur.execute(
+            "SELECT file_id FROM stored_media WHERE id=%s AND user_id=%s",
+            (media_id, call.from_user.id)
+        )
+        r = cur.fetchone()
+        cur.close()
+        conn.close()
+
+        if not r:
+            return
+
+        file_id = r[0]
+
+        if file_type == "photo":
+            bot.send_photo(call.message.chat.id, file_id)
+
+        elif file_type == "video":
+            bot.send_video(call.message.chat.id, file_id)
+
+        elif file_type == "document":
+            bot.send_document(call.message.chat.id, file_id)
+
+        elif file_type == "audio":
+            bot.send_audio(call.message.chat.id, file_id)
+
+    # ---------- ADMIN PANEL ----------
     elif data == "admin_panel":
+
         if call.from_user.id != ADMIN_ID:
-            bot.answer_callback_query(call.id, "Unauthorized")
             return
-        bot.edit_message_text(
-            admin_panel_text(),
-            call.message.chat.id,
-            call.message.message_id,
-            reply_markup=admin_panel_markup()
-        )
-    elif data == "admin_stats":
-        if call.from_user.id != ADMIN_ID:
-            bot.answer_callback_query(call.id, "Unauthorized")
-            return
-        conn  = get_connection()
-        cur = conn.cursor()
-        cur.execute("SELECT COUNT(*) FROM users")
-        total_users = cur.fetchone()[0]
-        cur.execute("SELECT COUNT(*) FROM stored_media")
-        total_files = cur.fetchone()[0]
-        cur.close()
-        conn.close()
-        total_size = format_size(get_total_storage())
-        bot.edit_message_text(
-            f"📊 Bot Statistics\n\n"
-            f"👥 Total Users: {total_users}\n"
-            f"📦 Total Files: {total_files}\n"
-            f"💾 Total Storage Used: {total_size}",
-            call.message.chat.id,
-            call.message.message_id,
-            reply_markup=admin_panel_markup()
-        )
-    elif data == "admin_users":
-        if call.from_user.id != ADMIN_ID:
-            bot.answer_callback_query(call.id, "Unauthorized")
-            return
-        conn  = get_connection()
-        cur = conn.cursor()
-        cur.execute("SELECT COUNT(*) FROM users")
-        total_users = cur.fetchone()[0]
-        cur.close()
-        conn.close()
-        bot.edit_message_text(
-            f"👥 Total Users: {total_users}",
-            call.message.chat.id,
-            call.message.message_id,
-            reply_markup=admin_panel_markup()
-        )
-    elif data == "admin_files":
-        if call.from_user.id != ADMIN_ID:
-            bot.answer_callback_query(call.id, "Unauthorized")
-            return
-        conn  = get_connection()
-        cur = conn.cursor()
-        cur.execute("SELECT COUNT(*) FROM stored_media")
-        total_files = cur.fetchone()[0]
-        cur.close()
-        conn.close()
-        bot.edit_message_text(
-            f"📦 Total Files: {total_files}",
-            call.message.chat.id,
-            call.message.message_id,
-            reply_markup=admin_panel_markup()
-        )
+
+        safe_edit(admin_panel_text(), admin_panel_markup())
+
+    # ---------- ADMIN USERS ----------
     elif data.startswith("admin_userlist_"):
+
         if call.from_user.id != ADMIN_ID:
-            bot.answer_callback_query(call.id, "Unauthorized")
             return
 
         page = int(data.split("_")[-1])
         users = get_users_page(page)
 
-        text = f"👥 Select User (Page {page+1})"
-
         markup = InlineKeyboardMarkup()
 
-        for user_id, username in users:
-
-            if username:
-                label = f"@{username}"
-            else:
-                label = f"User {user_id}"
-
+        for uid, username in users:
+            label = f"@{username}" if username else f"User {uid}"
             markup.add(
                 InlineKeyboardButton(
                     label,
-                    callback_data=f"admin_openuser_{user_id}"
+                    callback_data=f"admin_openuser_{uid}"
                 )
             )
 
         if page > 0:
             markup.add(
-                InlineKeyboardButton("⬅ Prev", callback_data=f"admin_userlist_{page-1}")
+                InlineKeyboardButton("⬅ Prev",
+                callback_data=f"admin_userlist_{page-1}")
             )
 
         if len(users) == USERS_PER_PAGE:
             markup.add(
-                InlineKeyboardButton("Next ➡", callback_data=f"admin_userlist_{page+1}")
+                InlineKeyboardButton("Next ➡",
+                callback_data=f"admin_userlist_{page+1}")
             )
 
         markup.add(InlineKeyboardButton("🔙 Back", callback_data="admin_panel"))
 
-        bot.edit_message_text(
-            text,
-            call.message.chat.id,
-            call.message.message_id,
-            reply_markup=markup
-        )
+        safe_edit(f"👥 Select User (Page {page+1})", markup)
+
+    # ---------- ADMIN OPEN USER ----------
     elif data.startswith("admin_openuser_"):
+
         if call.from_user.id != ADMIN_ID:
             return
 
-        user_id = int(data.split("_")[-1])
+        uid = int(data.split("_")[-1])
 
-        total = get_total_files(user_id)
-        cats = get_category_counts(user_id)
+        cats = get_category_counts(uid)
 
         text = (
-            f"👤 User ID: {user_id}\n\n"
-            f"📦 Total Files: {total}\n"
+            f"👤 User ID: {uid}\n\n"
+            f"📦 Total Files: {get_total_files(uid)}\n"
             f"📷 Photos: {cats.get('photo',0)}\n"
             f"🎥 Videos: {cats.get('video',0)}\n"
             f"📄 Documents: {cats.get('document',0)}\n"
@@ -522,149 +521,89 @@ def callback_handler(call):
         )
 
         markup = InlineKeyboardMarkup()
-
         markup.add(
-            InlineKeyboardButton(
-                "📂 View Files",
-                callback_data=f"admin_userfiles_{user_id}"
-            )
+            InlineKeyboardButton("📂 View Files",
+            callback_data=f"admin_userfiles_{uid}")
         )
         markup.add(
-            InlineKeyboardButton(
-                "📤 Send Media",
-                callback_data=f"admin_sendmedia_{user_id}"
-            )
+            InlineKeyboardButton("📤 Send Media",
+            callback_data=f"admin_sendmedia_{uid}")
         )
-
         markup.add(
-            InlineKeyboardButton(
-                "🔙 Back to users",
-                callback_data="admin_userlist_0"
-            )
+            InlineKeyboardButton("🔙 Back",
+            callback_data="admin_userlist_0")
         )
 
-        bot.edit_message_text(
-            text,
-            call.message.chat.id,
-            call.message.message_id,
-            reply_markup=markup
-        )
-    elif data.startswith("admin_userfiles_"):
-        if call.from_user.id != ADMIN_ID:
-            return
+        safe_edit(text, markup)
 
-        user_id = int(data.split("_")[-1])
-
-        text = "📂 Select category"
-
-        bot.edit_message_text(
-            text,
-            call.message.chat.id,
-            call.message.message_id,
-            reply_markup=category_menu(user_id)
-        )
+    # ---------- ADMIN SEND MEDIA ----------
     elif data.startswith("admin_sendmedia_"):
+
         if call.from_user.id != ADMIN_ID:
             return
 
-        user_id = int(data.split("_")[-1])
+        uid = int(data.split("_")[-1])
 
-        admin_send_state[call.from_user.id] = {
-            "target_user": user_id
-        }
+        admin_send_state[call.from_user.id] = {"target_user": uid}
 
         bot.send_message(
             call.message.chat.id,
-            "📩 Forward ANY message from the target group\n\n"
-            "OR send the group ID."
+            "📩 Forward ANY message from the group\nOR send group ID"
         )
+
+    # ---------- CANCEL ----------
     elif data == "admin_cancel_send":
 
         if call.from_user.id in admin_active_jobs:
             admin_active_jobs[call.from_user.id]["cancel"] = True
+
+    # ---------- CONFIRM SEND ----------
     elif data == "admin_confirm_send":
 
         if call.from_user.id not in admin_send_state:
             return
 
         state = admin_send_state[call.from_user.id]
-
-        user_id = state["target_user"]
+        uid = state["target_user"]
         group_id = state.get("group_id")
 
         if not group_id:
             bot.answer_callback_query(call.id, "Send group first")
             return
 
-        # prevent duplicate running job
-        if call.from_user.id in admin_active_jobs:
-            bot.answer_callback_query(call.id, "Already sending")
-            return
-
-        bot.send_message(call.message.chat.id, "📥 Preparing media list...")
-
         conn = get_connection()
         cur = conn.cursor()
         cur.execute("""
-            SELECT id, file_id, file_type, caption
+            SELECT file_id, file_type, caption
             FROM stored_media
             WHERE user_id=%s
             ORDER BY id ASC
-        """, (user_id,))
+        """, (uid,))
         rows = cur.fetchall()
         cur.close()
         conn.close()
 
-        total = len(rows)
+        admin_active_jobs[call.from_user.id] = {"cancel": False}
 
-        # mark job active
-        admin_active_jobs[call.from_user.id] = {
-            "cancel": False
-        }
+        bot.send_message(call.message.chat.id, f"🚀 Sending {len(rows)} files...")
 
-        # cancel button
-        markup = InlineKeyboardMarkup()
-        markup.add(
-            InlineKeyboardButton("🛑 CANCEL SENDING", callback_data="admin_cancel_send")
+        from telebot.types import (
+            InputMediaPhoto, InputMediaVideo,
+            InputMediaDocument, InputMediaAudio
         )
 
-        bot.send_message(
-            call.message.chat.id,
-            f"🚀 Sending started\nTotal files: {total}",
-            reply_markup=markup
-        )
+        def sender():
 
-        # BACKGROUND THREAD
-        from telebot.types import InputMediaPhoto, InputMediaVideo, InputMediaDocument, InputMediaAudio
+            batch = []
 
-    from telebot.types import (
-        InputMediaPhoto,
-        InputMediaVideo,
-        InputMediaDocument,
-        InputMediaAudio
-    )
+            def flush():
 
-    def sender():
+                nonlocal batch
 
-        sent_units = 0
-        batch = []
-
-        def flush_batch():
-            """Send batch as single or album (counts as ONE message)"""
-            nonlocal batch, sent_units
-
-            if not batch:
-                return
-
-            try:
-
-                # cancel check BEFORE sending
-                if admin_active_jobs[call.from_user.id]["cancel"]:
+                if not batch:
                     return
 
-                # single media
                 if len(batch) == 1:
-
                     m = batch[0]
 
                     if isinstance(m, InputMediaPhoto):
@@ -680,62 +619,34 @@ def callback_handler(call):
                         bot.send_audio(group_id, m.media, caption=m.caption)
 
                 else:
-                    # album send
                     bot.send_media_group(group_id, batch)
 
-                sent_units += 1
+                batch = []
+                time.sleep(1)   # ⭐ one second per send
 
-                # progress update every 10 sends
-                if sent_units % 10 == 0:
-                    bot.send_message(
-                        call.message.chat.id,
-                        f"📤 Sent messages: {sent_units}"
-                    )
+            for file_id, t, caption in rows:
 
-                # ⭐ THIS IS THE IMPORTANT PART
-                # wait 1 second AFTER each message/album
-                time.sleep(1)
+                if admin_active_jobs[call.from_user.id]["cancel"]:
+                    bot.send_message(call.message.chat.id, "🛑 Cancelled")
+                    return
 
-            except Exception as e:
-                bot.send_message(call.message.chat.id, f"ERROR:\n{e}")
-                print("Send error:", e)
-                time.sleep(2)
+                if t == "photo":
+                    batch.append(InputMediaPhoto(file_id, caption=caption))
+                elif t == "video":
+                    batch.append(InputMediaVideo(file_id, caption=caption))
+                elif t == "document":
+                    batch.append(InputMediaDocument(file_id, caption=caption))
+                elif t == "audio":
+                    batch.append(InputMediaAudio(file_id, caption=caption))
 
-            batch = []
+                if len(batch) == 10:
+                    flush()
 
+            flush()
 
-        for media_id, file_id, file_type, caption in rows:
+            bot.send_message(call.message.chat.id, "✅ Done")
 
-            # cancel check
-            if admin_active_jobs[call.from_user.id]["cancel"]:
-                bot.send_message(call.message.chat.id, "🛑 Sending cancelled")
-                admin_active_jobs.pop(call.from_user.id, None)
-                return
-
-            # build media object
-            if file_type == "photo":
-                batch.append(InputMediaPhoto(file_id, caption=caption))
-
-            elif file_type == "video":
-                batch.append(InputMediaVideo(file_id, caption=caption))
-
-            elif file_type == "document":
-                batch.append(InputMediaDocument(file_id, caption=caption))
-
-            elif file_type == "audio":
-                batch.append(InputMediaAudio(file_id, caption=caption))
-
-            # Telegram album max = 10
-            if len(batch) == 10:
-                flush_batch()
-
-        # send remaining
-        flush_batch()
-
-        bot.send_message(call.message.chat.id, "✅ All media sent")
-
-        admin_active_jobs.pop(call.from_user.id, None)
-        admin_send_state.pop(call.from_user.id, None)
+        threading.Thread(target=sender).start()
 # ================= ADMIN STATS ================= #
 
 @bot.message_handler(commands=['stats'])
