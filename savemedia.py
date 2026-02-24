@@ -40,7 +40,8 @@ def init_db():
             file_id TEXT NOT NULL,
             file_type TEXT NOT NULL,
             caption TEXT,
-            saved_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
+            saved_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+            UNIQUE(user_id, file_id)
         );
     """)
 
@@ -67,13 +68,20 @@ def save_user(user):
 def save_media(user_id, file_id, file_type, caption):
     conn = get_connection()
     cur = conn.cursor()
-    cur.execute(
-        "INSERT INTO stored_media (user_id, file_id, file_type, caption) VALUES (%s, %s, %s, %s)",
-        (user_id, file_id, file_type, caption)
-    )
-    conn.commit()
-    cur.close()
-    conn.close()
+    try:
+        cur.execute(
+            "INSERT INTO stored_media (user_id, file_id, file_type, caption) VALUES (%s, %s, %s, %s)",
+            (user_id, file_id, file_type, caption)
+        )
+        conn.commit()
+        cur.close()
+        conn.close()
+        return True  # saved
+    except psycopg2.errors.UniqueViolation:
+        conn.rollback()
+        cur.close()
+        conn.close()
+        return False  # duplicate
 
 def get_total_files(user_id):
     conn = get_connection()
@@ -144,22 +152,57 @@ def process_single_media(message):
 
 
 def process_album(media_group_id, user_id):
-    time.sleep(1)  # wait for all album parts
+    time.sleep(1)
 
     messages = media_groups.pop(media_group_id, [])
 
     if not messages:
         return
 
+    saved_count = 0
+    duplicate_count = 0
+
     for msg in messages:
-        process_single_media(msg)
+        file_type = msg.content_type
+        caption = msg.caption
+
+        if file_type == "photo":
+            file_id = msg.photo[-1].file_id
+        elif file_type == "video":
+            file_id = msg.video.file_id
+        elif file_type == "document":
+            file_id = msg.document.file_id
+        elif file_type == "audio":
+            file_id = msg.audio.file_id
+        else:
+            continue
+
+        result = save_media(user_id, file_id, file_type, caption)
+
+        if result:
+            saved_count += 1
+        else:
+            duplicate_count += 1
 
     total = get_total_files(user_id)
 
-    bot.send_message(
-        user_id,
-        f"✅ Album Saved Successfully\n📦 Total Files: {total}"
-    )
+    chat_id = messages[0].chat.id
+
+    if duplicate_count > 0:
+        bot.send_message(
+            chat_id,
+            f"📦 Album Processed\n\n"
+            f"Total Media: {len(messages)}\n"
+            f"✅ Saved: {saved_count}\n"
+            f"♻️ Duplicates: {duplicate_count}\n\n"
+            f"📦 Total Files: {total}"
+        )
+    else:
+        bot.send_message(
+            chat_id,
+            f"✅ Album Saved Successfully\n"
+            f"📦 Total Files: {total}"
+        )
 
 
 @bot.message_handler(content_types=['photo', 'video', 'document', 'audio'])
@@ -185,12 +228,38 @@ def handle_media(message):
         # Single media
         def delayed_save():
             time.sleep(1)
-            process_single_media(message)
+
+            file_type = message.content_type
+            caption = message.caption
+
+            if file_type == "photo":
+                file_id = message.photo[-1].file_id
+            elif file_type == "video":
+                file_id = message.video.file_id
+            elif file_type == "document":
+                file_id = message.document.file_id
+            elif file_type == "audio":
+                file_id = message.audio.file_id
+            else:
+                return
+
+            result = save_media(message.from_user.id, file_id, file_type, caption)
             total = get_total_files(message.from_user.id)
-            bot.send_message(
-                message.chat.id,
-                f"✅ Saved Successfully\n📦 Total Files: {total}"
-            )
+
+            if result:
+                bot.send_message(
+                    message.chat.id,
+                    f"✅ Saved Successfully\n📦 Total Files: {total}"
+                )
+            else:
+                bot.send_message(
+                    message.chat.id,
+                    f"♻️ Duplicate Media Detected\n\n"
+                    f"Total Media: 1\n"
+                    f"✅ Saved: 0\n"
+                    f"♻️ Duplicates: 1\n\n"
+                    f"📦 Total Files: {total}"
+                )
 
         threading.Thread(target=delayed_save).start()
 
@@ -345,5 +414,6 @@ def stats(message):
 
 if __name__ == "__main__":
     init_db()
+    bot.remove_webhook()
     print("Bot is running...")
-    bot.infinity_polling()
+    bot.infinity_polling(skip_pending=True)
