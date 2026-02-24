@@ -153,6 +153,8 @@ def dashboard_markup(user_id):
 
 @bot.message_handler(commands=['start'])
 def start(message):
+    print("User ID:", message.from_user.id)
+    print("Admin ID:", ADMIN_ID)
     save_user(message.from_user)
     bot.send_message(
         message.chat.id,
