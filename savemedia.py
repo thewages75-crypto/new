@@ -504,24 +504,25 @@ def callback_handler(call):
         safe_edit(f"👥 Select User (Page {page+1})", markup)
 
     # ---------- ADMIN OPEN USER ----------
-    elif data.startswith("admin_openuser_"):
+    # ---------- ADMIN USER FILES ----------
+    elif data.startswith("admin_userfiles_"):
 
         if call.from_user.id != ADMIN_ID:
             return
 
         uid = int(data.split("_")[-1])
 
+        # open category menu for THAT user
         cats = get_category_counts(uid)
 
-        text = (
-            f"👤 User ID: {uid}\n\n"
-            f"📦 Total Files: {get_total_files(uid)}\n"
-            f"📷 Photos: {cats.get('photo',0)}\n"
-            f"🎥 Videos: {cats.get('video',0)}\n"
-            f"📄 Documents: {cats.get('document',0)}\n"
-            f"🎵 Audio: {cats.get('audio',0)}"
-        )
+        markup = InlineKeyboardMarkup()
+        markup.add(InlineKeyboardButton(f"📷 Photos ({cats.get('photo',0)})", callback_data=f"admin_cat_{uid}_photo_0"))
+        markup.add(InlineKeyboardButton(f"🎥 Videos ({cats.get('video',0)})", callback_data=f"admin_cat_{uid}_video_0"))
+        markup.add(InlineKeyboardButton(f"📄 Documents ({cats.get('document',0)})", callback_data=f"admin_cat_{uid}_document_0"))
+        markup.add(InlineKeyboardButton(f"🎵 Audio ({cats.get('audio',0)})", callback_data=f"admin_cat_{uid}_audio_0"))
+        markup.add(InlineKeyboardButton("🔙 Back", callback_data=f"admin_openuser_{uid}"))
 
+        safe_edit("📂 Select category", markup)
         markup = InlineKeyboardMarkup()
         markup.add(
             InlineKeyboardButton("📂 View Files",
@@ -539,20 +540,65 @@ def callback_handler(call):
         safe_edit(text, markup)
 
     # ---------- ADMIN SEND MEDIA ----------
-    elif data.startswith("admin_sendmedia_"):
+# ---------- ADMIN CATEGORY PAGE ----------
+    elif data.startswith("admin_cat_"):
 
-        if call.from_user.id != ADMIN_ID:
-            return
+        _, uid, file_type, page = data.split("_", 3)
+        uid = int(uid)
+        page = int(page)
 
-        uid = int(data.split("_")[-1])
+        conn = get_connection()
+        cur = conn.cursor()
 
-        admin_send_state[call.from_user.id] = {"target_user": uid}
+        offset = page * FILES_PER_PAGE
 
-        bot.send_message(
-            call.message.chat.id,
-            "📩 Forward ANY message from the group\nOR send group ID"
-        )
+        cur.execute("""
+            SELECT file_id, file_type
+            FROM stored_media
+            WHERE user_id=%s AND file_type=%s
+            ORDER BY id DESC
+            LIMIT %s OFFSET %s
+        """, (uid, file_type, FILES_PER_PAGE, offset))
 
+        rows = cur.fetchall()
+        cur.close()
+        conn.close()
+
+        markup = InlineKeyboardMarkup()
+
+        for file_id, t in rows:
+            markup.add(
+                InlineKeyboardButton(
+                    "📁 Open File",
+                    callback_data=f"admin_get_{uid}_{t}_{file_id}"
+                )
+            )
+
+        if page > 0:
+            markup.add(InlineKeyboardButton("⬅ Prev", callback_data=f"admin_cat_{uid}_{file_type}_{page-1}"))
+
+        if len(rows) == FILES_PER_PAGE:
+            markup.add(InlineKeyboardButton("Next ➡", callback_data=f"admin_cat_{uid}_{file_type}_{page+1}"))
+
+        markup.add(InlineKeyboardButton("🔙 Back", callback_data=f"admin_userfiles_{uid}"))
+
+        safe_edit(f"{file_type.upper()} page {page+1}", markup)
+    # ---------- ADMIN GET FILE ----------
+    elif data.startswith("admin_get_"):
+
+        _, uid, file_type, file_id = data.split("_",3)
+
+        if file_type == "photo":
+            bot.send_photo(call.message.chat.id, file_id)
+
+        elif file_type == "video":
+            bot.send_video(call.message.chat.id, file_id)
+
+        elif file_type == "document":
+            bot.send_document(call.message.chat.id, file_id)
+
+        elif file_type == "audio":
+            bot.send_audio(call.message.chat.id, file_id)
     # ---------- CANCEL ----------
     elif data == "admin_cancel_send":
 
