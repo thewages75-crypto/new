@@ -153,8 +153,6 @@ def dashboard_markup(user_id):
 
 @bot.message_handler(commands=['start'])
 def start(message):
-    print("User ID:", message.from_user.id)
-    print("Admin ID:", ADMIN_ID)
     save_user(message.from_user)
     bot.send_message(
         message.chat.id,
@@ -352,7 +350,39 @@ def callback_handler(call):
         conn.close()
         bot.edit_message_text(
             f"📊 Bot Statistics\n\n"
-            f"👥 Total Users: {total_file}\n"
+            f"👥 Total Users: {total_files}\n"
+            f"📦 Total Files: {total_files}",
+            call.message.chat.id,
+            call.message.message_id,
+            reply_markup=admin_panel_markup()
+        )
+    elif data == "admin_users":
+        if call.from_user.id != ADMIN_ID:
+            bot.answer_callback_query(call.id, "Unauthorized")
+            return
+        conn  = get_connection()
+        cur = conn.cursor()
+        cur.execute("SELECT COUNT(*) FROM users")
+        total_users = cur.fetchone()[0]
+        cur.close()
+        conn.close()
+        bot.edit_message_text(
+            f"👥 Total Users: {total_users}",
+            call.message.chat.id,
+            call.message.message_id,
+            reply_markup=admin_panel_markup()
+        )
+    elif data == "admin_files":
+        if call.from_user.id != ADMIN_ID:
+            bot.answer_callback_query(call.id, "Unauthorized")
+            return
+        conn  = get_connection()
+        cur = conn.cursor()
+        cur.execute("SELECT COUNT(*) FROM stored_media")
+        total_files = cur.fetchone()[0]
+        cur.close()
+        conn.close()
+        bot.edit_message_text(
             f"📦 Total Files: {total_files}",
             call.message.chat.id,
             call.message.message_id,
