@@ -42,7 +42,8 @@ def init_db():
             file_type TEXT NOT NULL,
             caption TEXT,
             saved_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
-            UNIQUE(user_id, file_id)
+            UNIQUE(user_id, file_id),
+            file_size BIGINT DEFAULT 0
         );
     """)
 
@@ -54,7 +55,23 @@ def init_db():
     conn.close()
 
 # ================= DB HELPERS ================= #
-
+def get_storage_used(user_id):
+    conn = get_connection()
+    cur = conn.cursor()
+    cur.execute(
+        "SELECT COALESCE(SUM(file_size), 0) FROM stored_media WHERE user_id = %s",
+        (user_id,)
+    )
+    total_size = cur.fetchone()[0]
+    cur.close()
+    conn.close()
+    return total_size
+def format_size(size):
+    for unit in ['B', 'KB', 'MB', 'GB']:
+        if size < 1024:
+            return f"{size:.2f} {unit}"
+        size /= 1024
+    return f"{size:.2f} TB"
 def save_user(user):
     conn = get_connection()
     cur = conn.cursor()
@@ -66,16 +83,16 @@ def save_user(user):
     cur.close()
     conn.close()
 
-def save_media(user_id, file_id, file_type, caption):
+def save_media(user_id, file_id, file_type, caption,file_size):
     conn = get_connection()
     cur = conn.cursor()
 
     cur.execute("""
-        INSERT INTO stored_media (user_id, file_id, file_type, caption)
-        VALUES (%s, %s, %s, %s)
+        INSERT INTO stored_media (user_id, file_id, file_type, caption, file_size)
+        VALUES (%s, %s, %s, %s, %s)
         ON CONFLICT (user_id, file_id) DO NOTHING
         RETURNING id;
-    """, (user_id, file_id, file_type, caption))
+    """, (user_id, file_id, file_type, caption, file_size))
 
     result = cur.fetchone()
 
@@ -111,7 +128,8 @@ def get_category_counts(user_id):
 # ================= DASHBOARD ================= #
 
 def dashboard_text(user_id):
-    total = get_total_files(user_id)
+    total_files = get_total_files(user_id)
+    total_size = format_size(get_storage_used(user_id))
     return f"📦 Cloud Vault\n\n📊 Your Storage:\n• Total Files: {total}\n\nChoose an option:"
 
 def dashboard_markup():
@@ -141,25 +159,31 @@ def finalize_user_upload(user_id, chat_id):
     if not session:
         return
 
-    total = get_total_files(user_id)
+    total_files = get_total_files(user_id)
+    total_size = format_size(get_storage_used(user_id))
+    message_id = session["message_id"]
 
-    # If duplicates exist → show detailed breakdown
     if session["duplicate"] > 0:
-        bot.send_message(
-            chat_id,
+        text = (
             f"📦 Upload Completed\n\n"
             f"Total Sent: {session['total']}\n"
             f"✅ Saved: {session['saved']}\n"
             f"♻️ Skipped (Duplicates): {session['duplicate']}\n\n"
-            f"📦 Total Files: {total}"
+            f"📦 Total Files: {total_files}\n"
+            f"📦 Total Size: {total_size}"
         )
     else:
-        # Clean minimal confirmation
-        bot.send_message(
-            chat_id,
+        text = (
             f"✅ {session['saved']} file(s) saved\n"
-            f"📦 Total Files: {total}"
+            f"📦 Total Files: {total_files}"
+            f"📦 Total Size: {total_size}"
         )
+
+    bot.edit_message_text(
+        text,
+        chat_id,
+        message_id
+    )
 
 @bot.message_handler(content_types=['photo', 'video', 'document', 'audio'])
 def handle_media(message):
@@ -170,25 +194,32 @@ def handle_media(message):
 
     if file_type == "photo":
         file_id = message.photo[-1].file_id
+        file_size = message.photo[-1].file_size
     elif file_type == "video":
         file_id = message.video.file_id
+        file_size = message.video.file_size
     elif file_type == "document":
         file_id = message.document.file_id
+        file_size = message.document.file_size
     elif file_type == "audio":
         file_id = message.audio.file_id
+        file_size = message.audio.file_size
     else:
         return
 
-    result = save_media(message.from_user.id, file_id, file_type, caption)
+    result = save_media(message.from_user.id, file_id, file_type, caption, file_size)
 
     user_id = message.from_user.id
     chat_id = message.chat.id
 
     if user_id not in user_sessions:
+        processing_msg = bot.send_message(chat_id, "⏳ Processing uploads...")
+
         user_sessions[user_id] = {
             "total": 0,
             "saved": 0,
-            "duplicate": 0
+            "duplicate": 0,
+            "message_id": processing_msg.message_id
         }
 
     session = user_sessions[user_id]
