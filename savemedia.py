@@ -424,19 +424,30 @@ def callback_handler(call):
         if call.from_user.id != ADMIN_ID:
             bot.answer_callback_query(call.id, "Unauthorized")
             return
-        _, page = data.split("_")
-        page = int(page)
+
+        page = int(data.split("_")[-1])
         users = get_users_page(page)
 
-        text = "👤 User List:\n\n"
-        for user_id, username in users:
-            text += f"• {username or 'N/A'} (ID: {user_id})\n"
+        text = f"👥 Registered Users (Page {page + 1})\n\n"
+
+        for idx, (user_id, username) in enumerate(users, start=1 + page * USERS_PER_PAGE):
+            if username:
+                text += f"{idx}. @{username} (ID: {user_id})\n"
+            else:
+                text += f"{idx}. NoUsername (ID: {user_id})\n"
 
         markup = InlineKeyboardMarkup()
+
         if page > 0:
-            markup.add(InlineKeyboardButton("⬅ Prev", callback_data=f"admin_userlist_{page-1}"))
+            markup.add(
+                InlineKeyboardButton("⬅ Prev", callback_data=f"admin_userlist_{page-1}")
+            )
+
         if len(users) == USERS_PER_PAGE:
-            markup.add(InlineKeyboardButton("Next ➡", callback_data=f"admin_userlist_{page+1}"))
+            markup.add(
+                InlineKeyboardButton("Next ➡", callback_data=f"admin_userlist_{page+1}")
+            )
+
         markup.add(InlineKeyboardButton("🔙 Back", callback_data="admin_panel"))
 
         bot.edit_message_text(
