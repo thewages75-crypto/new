@@ -40,7 +40,6 @@ def init_db():
             file_id TEXT NOT NULL,
             file_type TEXT NOT NULL,
             caption TEXT,
-            transferred BOOLEAN DEFAULT FALSE,
             saved_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
             UNIQUE(user_id, file_id),
             file_size BIGINT DEFAULT 0
@@ -64,68 +63,10 @@ def admin_panel_markup():
     markup.add(InlineKeyboardButton("👥 Total Users", callback_data="admin_users"))
     markup.add(InlineKeyboardButton("📦 Total Files", callback_data="admin_files"))
     markup.add(InlineKeyboardButton("👤 View Users", callback_data="admin_userlist_0"))
-    markup.add(InlineKeyboardButton("📤 Send Pending", callback_data="admin_pending_users"))
     markup.add(InlineKeyboardButton("🔙 Back", callback_data="menu_main"))
     return markup
 USERS_PER_PAGE = 10
-def get_user_pending_stats(user_id):
-    conn = get_connection()
-    cur = conn.cursor()
 
-    cur.execute("""
-        SELECT file_type, COUNT(*)
-        FROM stored_media
-        WHERE user_id = %s AND transferred = FALSE
-        GROUP BY file_type
-    """, (user_id,))
-
-    breakdown = dict(cur.fetchall())
-
-    cur.execute("""
-        SELECT COUNT(*)
-        FROM stored_media
-        WHERE user_id = %s AND transferred = FALSE
-    """, (user_id,))
-
-    total = cur.fetchone()[0]
-
-    cur.close()
-    conn.close()
-
-    return total, breakdown
-def get_users_with_pending():
-    conn = get_connection()
-    cur = conn.cursor()
-
-    cur.execute("""
-        SELECT u.user_id, u.username, COUNT(sm.id)
-        FROM stored_media sm
-        JOIN users u ON u.user_id = sm.user_id
-        WHERE sm.transferred = FALSE
-        GROUP BY u.user_id, u.username
-        ORDER BY COUNT(sm.id) DESC
-    """)
-
-    rows = cur.fetchall()
-    cur.close()
-    conn.close()
-
-    return rows
-def get_all_users():
-    conn = get_connection()
-    cur = conn.cursor()
-
-    cur.execute("""
-        SELECT user_id, username
-        FROM users
-        ORDER BY joined_at DESC
-    """)
-
-    users = cur.fetchall()
-    cur.close()
-    conn.close()
-
-    return users
 def get_users_page(page):
     conn = get_connection()
     cur = conn.cursor()
@@ -487,58 +428,23 @@ def callback_handler(call):
         page = int(data.split("_")[-1])
         users = get_users_page(page)
 
+        text = f"👥 Select User (Page {page+1})"
+
         markup = InlineKeyboardMarkup()
 
-        # create ONE BUTTON per user
         for user_id, username in users:
 
             if username:
-                text = f"@{username}"
+                label = f"@{username}"
             else:
-                text = f"User {user_id}"
+                label = f"User {user_id}"
 
-            # button opens that user
             markup.add(
                 InlineKeyboardButton(
-                    text,
+                    label,
                     callback_data=f"admin_openuser_{user_id}"
                 )
             )
-
-        # pagination
-        if page > 0:
-            markup.add(
-                InlineKeyboardButton("⬅ Prev", callback_data=f"admin_userlist_{page-1}")
-            )
-
-        if len(users) == USERS_PER_PAGE:
-            markup.add(
-                InlineKeyboardButton("Next ➡", callback_data=f"admin_userlist_{page+1}")
-            )
-
-        markup.add(
-            InlineKeyboardButton("🔙 Back", callback_data="admin_panel")
-        )
-
-        bot.edit_message_text(
-            f"👥 Select a user (Page {page+1})",
-            call.message.chat.id,
-            call.message.message_id,
-            reply_markup=markup
-        )
-
-        page = int(data.split("_")[-1])
-        users = get_users_page(page)
-
-        text = f"👥 Registered Users (Page {page + 1})\n\n"
-
-        for idx, (user_id, username) in enumerate(users, start=1 + page * USERS_PER_PAGE):
-            if username:
-                text += f"{idx}. @{username} (ID: {user_id})\n"
-            else:
-                text += f"{idx}. NoUsername (ID: {user_id})\n"
-
-        markup = InlineKeyboardMarkup()
 
         if page > 0:
             markup.add(
@@ -565,138 +471,31 @@ def callback_handler(call):
         user_id = int(data.split("_")[-1])
 
         total = get_total_files(user_id)
-        size = format_size(get_storage_used(user_id))
-        counts = get_category_counts(user_id)
+        cats = get_category_counts(user_id)
 
         text = (
-            f"👤 USER ID: {user_id}\n\n"
-            f"📦 Files: {total}\n"
-            f"💾 Storage: {size}\n\n"
-            f"📷 Photos: {counts.get('photo',0)}\n"
-            f"🎥 Videos: {counts.get('video',0)}\n"
-            f"📄 Documents: {counts.get('document',0)}\n"
-            f"🎵 Audio: {counts.get('audio',0)}"
+            f"👤 User ID: {user_id}\n\n"
+            f"📦 Total Files: {total}\n"
+            f"📷 Photos: {cats.get('photo',0)}\n"
+            f"🎥 Videos: {cats.get('video',0)}\n"
+            f"📄 Documents: {cats.get('document',0)}\n"
+            f"🎵 Audio: {cats.get('audio',0)}"
         )
 
         markup = InlineKeyboardMarkup()
-        markup.add(
-            InlineKeyboardButton("🔙 Back to users", callback_data="admin_userlist_0")
-        )
 
-        bot.edit_message_text(
-            text,
-            call.message.chat.id,
-            call.message.message_id,
-            reply_markup=markup
-        )
-    elif data == "admin_view_users":
-        if call.from_user.id != ADMIN_ID:
-            return
-
-        users = get_all_users()
-
-        markup = InlineKeyboardMarkup()
-
-        for user_id, username in users:
-            name = f"@{username}" if username else str(user_id)
-
-            markup.add(
-                InlineKeyboardButton(
-                    name,
-                    callback_data=f"admin_user_stats_{user_id}"
-                )
-            )
-
-        markup.add(InlineKeyboardButton("🔙 Back", callback_data="admin_panel"))
-
-        bot.edit_message_text(
-            "👤 Select a user:",
-            call.message.chat.id,
-            call.message.message_id,
-            reply_markup=markup
-        )
-    elif data.startswith("admin_user_stats_"):
-        if call.from_user.id != ADMIN_ID:
-            return
-
-        user_id = int(data.split("_")[-1])
-
-        total_files = get_total_files(user_id)
-        breakdown = get_category_counts(user_id)
-
-        text = (
-            f"📊 User Statistics\n\n"
-            f"User ID: {user_id}\n\n"
-            f"Total Media: {total_files}\n"
-            f"📷 Photos: {breakdown.get('photo', 0)}\n"
-            f"🎥 Videos: {breakdown.get('video', 0)}\n"
-            f"📄 Documents: {breakdown.get('document', 0)}\n"
-            f"🎵 Audio: {breakdown.get('audio', 0)}"
-        )
-
-        markup = InlineKeyboardMarkup()
-        markup.add(InlineKeyboardButton("🔙 Back", callback_data="admin_view_users"))
-
-        bot.edit_message_text(
-            text,
-            call.message.chat.id,
-            call.message.message_id,
-            reply_markup=markup
-        )
-    elif data == "admin_pending_users":
-        if call.from_user.id != ADMIN_ID:
-            return
-
-        users = get_users_with_pending()
-
-        text = "📤 Users With Pending Media\n\n"
-        markup = InlineKeyboardMarkup()
-
-        for user_id, username, count in users:
-            name = f"@{username}" if username else str(user_id)
-            text += f"{name} — {count} media\n"
-
-            markup.add(
-                InlineKeyboardButton(
-                    f"{name} ({count})",
-                    callback_data=f"admin_pending_user_{user_id}"
-                )
-            )
-
-        markup.add(InlineKeyboardButton("🔙 Back", callback_data="admin_panel"))
-
-        bot.edit_message_text(
-            text,
-            call.message.chat.id,
-            call.message.message_id,
-            reply_markup=markup
-        )
-    elif data.startswith("admin_pending_user_"):
-        if call.from_user.id != ADMIN_ID:
-            return
-
-        user_id = int(data.split("_")[-1])
-
-        total, breakdown = get_user_pending_stats(user_id)
-
-        text = (
-            f"📤 Pending Media For User {user_id}\n\n"
-            f"Total: {total}\n"
-            f"📷 Photos: {breakdown.get('photo', 0)}\n"
-            f"🎥 Videos: {breakdown.get('video', 0)}\n"
-            f"📄 Documents: {breakdown.get('document', 0)}\n"
-            f"🎵 Audio: {breakdown.get('audio', 0)}\n"
-        )
-
-        markup = InlineKeyboardMarkup()
         markup.add(
             InlineKeyboardButton(
-                "🚀 Send To Group",
-                callback_data=f"admin_send_user_{user_id}"
+                "📂 View Files",
+                callback_data=f"admin_userfiles_{user_id}"
             )
         )
+
         markup.add(
-            InlineKeyboardButton("🔙 Back", callback_data="admin_pending_users")
+            InlineKeyboardButton(
+                "🔙 Back to users",
+                callback_data="admin_userlist_0"
+            )
         )
 
         bot.edit_message_text(
@@ -705,54 +504,20 @@ def callback_handler(call):
             call.message.message_id,
             reply_markup=markup
         )
-    elif data.startswith("admin_send_user_"):
+    elif data.startswith("admin_userfiles_"):
         if call.from_user.id != ADMIN_ID:
             return
 
         user_id = int(data.split("_")[-1])
 
-        # ⚠ Hardcode group for now
-        TARGET_GROUP_ID = 90  # Replace with real group ID
+        text = "📂 Select category"
 
-        conn = get_connection()
-        cur = conn.cursor()
-
-        cur.execute("""
-            SELECT id, file_id, file_type
-            FROM stored_media
-            WHERE user_id = %s AND transferred = FALSE
-        """, (user_id,))
-
-        rows = cur.fetchall()
-
-        sent = 0
-
-        for media_id, file_id, file_type in rows:
-            try:
-                if file_type == "photo":
-                    bot.send_photo(TARGET_GROUP_ID, file_id)
-                elif file_type == "video":
-                    bot.send_video(TARGET_GROUP_ID, file_id)
-                elif file_type == "document":
-                    bot.send_document(TARGET_GROUP_ID, file_id)
-                elif file_type == "audio":
-                    bot.send_audio(TARGET_GROUP_ID, file_id)
-
-                cur.execute(
-                    "UPDATE stored_media SET transferred = TRUE WHERE id = %s",
-                    (media_id,)
-                )
-
-                sent += 1
-
-            except Exception as e:
-                print("Send error:", e)
-
-        conn.commit()
-        cur.close()
-        conn.close()
-
-        bot.answer_callback_query(call.id, f"Sent {sent} media")
+        bot.edit_message_text(
+            text,
+            call.message.chat.id,
+            call.message.message_id,
+            reply_markup=category_menu(user_id)
+        )
     elif data == "menu_files":
         bot.edit_message_text(
             "📂 Select Category",
