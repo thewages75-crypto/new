@@ -697,6 +697,7 @@ def sender():
             time.sleep(1)
 
         except Exception as e:
+            bot.send_message(call.message.chat.id, f"ERROR:\n{e}")
             print("Send error:", e)
             time.sleep(2)
 
