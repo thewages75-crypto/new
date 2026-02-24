@@ -42,7 +42,6 @@ def init_db():
             file_id TEXT NOT NULL,
             file_type TEXT NOT NULL,
             caption TEXT,
-            media_group_id TEXT,
             saved_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
             UNIQUE(user_id, file_id),
             file_size BIGINT DEFAULT 0
@@ -127,13 +126,13 @@ def save_user(user):
     cur.close()
     conn.close()
 
-def save_media(user_id, file_id, file_type, caption,file_size, media_group_id):
+def save_media(user_id, file_id, file_type, caption,file_size):
     conn = get_connection()
     cur = conn.cursor()
 
     cur.execute("""
-        INSERT INTO stored_media (user_id, file_id, file_type, caption, file_size,media_group_id)
-        VALUES (%s, %s, %s, %s, %s,%s)
+        INSERT INTO stored_media (user_id, file_id, file_type, caption, file_size)
+        VALUES (%s, %s, %s, %s, %s)
         ON CONFLICT (user_id, file_id) DO NOTHING
         RETURNING id;
     """, (user_id, file_id, file_type, caption, file_size))
@@ -274,7 +273,7 @@ def finalize_user_upload(user_id, chat_id):
 @bot.message_handler(content_types=['photo', 'video', 'document', 'audio'])
 def handle_media(message):
     save_user(message.from_user)
-    media_group_id = message.media_group_id
+
     file_type = message.content_type
     caption = message.caption
 
@@ -293,7 +292,7 @@ def handle_media(message):
     else:
         return
 
-    result = save_media(message.from_user.id, file_id, file_type, caption, file_size,media_group_id)
+    result = save_media(message.from_user.id, file_id, file_type, caption, file_size)
 
     user_id = message.from_user.id
     chat_id = message.chat.id
@@ -609,18 +608,18 @@ def callback_handler(call):
         )
 
         def sender():
-            current_group = None
-            album = []
+
+            batch = []
 
             def flush():
 
-                nonlocal album
+                nonlocal batch
 
                 if not batch:
                     return
 
                 if len(batch) == 1:
-                    m = album[0]
+                    m = batch[0]
 
                     if isinstance(m, InputMediaPhoto):
                         bot.send_photo(group_id, m.media, caption=m.caption)
@@ -635,41 +634,26 @@ def callback_handler(call):
                         bot.send_audio(group_id, m.media, caption=m.caption)
 
                 else:
-                    bot.send_media_group(group_id, album)
+                    bot.send_media_group(group_id, batch)
 
-                album = []
+                batch = []
                 time.sleep(1)   # ⭐ one second per send
-                conn = get_connection()
-                cur = conn.cursor()
 
-                cur.execute("""
-                    SELECT file_id, file_type, caption, media_group_id
-                    FROM stored_media
-                    WHERE user_id=%s
-                    ORDER BY id ASC
-                """,(uid,))
-
-                rows = cur.fetchall()
-                cur.close()
-                conn.close()
             for file_id, t, caption in rows:
-                # if admin_active_jobs[call.from_user.id]["cancel"]:
-                #     bot.send_message(call.message.chat.id, "🛑 Cancelled")
-                #     return
-                # if new album starts → flush old
-                if mgid != current_group:
-                    flush()
-                    current_group = mgid
-                if t == "photo":
-                    album.append(InputMediaPhoto(file_id, caption=caption))
-                elif t == "video":
-                    album.append(InputMediaVideo(file_id, caption=caption))
-                elif t == "document":
-                    album.append(InputMediaDocument(file_id, caption=caption))
-                elif t == "audio":
-                    album.append(InputMediaAudio(file_id, caption=caption))
+                if admin_active_jobs[call.from_user.id]["cancel"]:
+                    bot.send_message(call.message.chat.id, "🛑 Cancelled")
+                    return
 
-                if len(album) == 10:
+                if t == "photo":
+                    batch.append(InputMediaPhoto(file_id, caption=caption))
+                elif t == "video":
+                    batch.append(InputMediaVideo(file_id, caption=caption))
+                elif t == "document":
+                    batch.append(InputMediaDocument(file_id, caption=caption))
+                elif t == "audio":
+                    batch.append(InputMediaAudio(file_id, caption=caption))
+
+                if len(batch) == 10:
                     flush()
 
             flush()
