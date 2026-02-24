@@ -77,11 +77,13 @@ def save_media(user_id, file_id, file_type, caption):
     """, (user_id, file_id, file_type, caption))
 
     result = cur.fetchone()
+
     conn.commit()
     cur.close()
     conn.close()
 
     return result is not None
+
 def get_total_files(user_id):
     conn = get_connection()
     cur = conn.cursor()
