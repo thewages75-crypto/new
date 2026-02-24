@@ -151,10 +151,11 @@ def process_single_media(message):
     save_media(message.from_user.id, file_id, file_type, caption)
 
 
-def process_album(media_group_id, user_id):
-    time.sleep(1)
+album_timers = {}
 
-    messages = media_groups.pop(media_group_id, [])
+def finalize_album(group_id, user_id):
+    messages = media_groups.pop(group_id, [])
+    album_timers.pop(group_id, None)
 
     if not messages:
         return
@@ -185,7 +186,6 @@ def process_album(media_group_id, user_id):
             duplicate_count += 1
 
     total = get_total_files(user_id)
-
     chat_id = messages[0].chat.id
 
     if duplicate_count > 0:
@@ -204,6 +204,69 @@ def process_album(media_group_id, user_id):
             f"📦 Total Files: {total}"
         )
 
+
+@bot.message_handler(content_types=['photo', 'video', 'document', 'audio'])
+def handle_media(message):
+    save_user(message.from_user)
+
+    if message.media_group_id:
+        group_id = message.media_group_id
+
+        if group_id not in media_groups:
+            media_groups[group_id] = []
+
+        media_groups[group_id].append(message)
+
+        # Cancel previous timer if exists
+        if group_id in album_timers:
+            album_timers[group_id].cancel()
+
+        # Start new timer (1 second after last media)
+        timer = threading.Timer(
+            1.0,
+            finalize_album,
+            args=(group_id, message.from_user.id)
+        )
+        album_timers[group_id] = timer
+        timer.start()
+
+    else:
+        def delayed_save():
+            time.sleep(1)
+
+            file_type = message.content_type
+            caption = message.caption
+
+            if file_type == "photo":
+                file_id = message.photo[-1].file_id
+            elif file_type == "video":
+                file_id = message.video.file_id
+            elif file_type == "document":
+                file_id = message.document.file_id
+            elif file_type == "audio":
+                file_id = message.audio.file_id
+            else:
+                return
+
+            result = save_media(message.from_user.id, file_id, file_type, caption)
+            total = get_total_files(message.from_user.id)
+
+            if result:
+                bot.send_message(
+                    message.chat.id,
+                    f"✅ Saved Successfully\n📦 Total Files: {total}"
+                )
+            else:
+                bot.send_message(
+                    message.chat.id,
+                    f"♻️ Duplicate Media Detected\n\n"
+                    f"Total Media: 1\n"
+                    f"✅ Saved: 0\n"
+                    f"♻️ Duplicates: 1\n\n"
+                    f"📦 Total Files: {total}"
+                )
+
+        threading.Thread(target=delayed_save).start()
 
 @bot.message_handler(content_types=['photo', 'video', 'document', 'audio'])
 def handle_media(message):
