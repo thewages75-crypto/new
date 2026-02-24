@@ -16,7 +16,7 @@ user_timers = {}
 FILES_PER_PAGE = 5
 media_groups = {}
 bot = telebot.TeleBot(BOT_TOKEN)
-
+session_lock = threading.Lock()
 # ================= DATABASE ================= #
 
 def get_connection():
@@ -212,15 +212,18 @@ def handle_media(message):
     user_id = message.from_user.id
     chat_id = message.chat.id
 
-    if user_id not in user_sessions:
-        # processing_msg = bot.send_message(chat_id, "⏳ Processing uploads...")
+    with session_lock:
+        if user_id not in user_sessions:
+            processing_msg = bot.send_message(chat_id, "⏳ Processing uploads...")
 
-        user_sessions[user_id] = {
-            "total": 0,
-            "saved": 0,
-            "duplicate": 0,
-            "message_id": bot.send_message(chat_id, "⏳ Processing uploads...").message_id
-        }
+            user_sessions[user_id] = {
+                "total": 0,
+                "saved": 0,
+                "duplicate": 0,
+                "message_id": processing_msg.message_id
+            }
+
+    session = user_sessions[user_id]
 
     session = user_sessions[user_id]
 
