@@ -637,105 +637,105 @@ def callback_handler(call):
         # BACKGROUND THREAD
         from telebot.types import InputMediaPhoto, InputMediaVideo, InputMediaDocument, InputMediaAudio
 
-from telebot.types import (
-    InputMediaPhoto,
-    InputMediaVideo,
-    InputMediaDocument,
-    InputMediaAudio
-)
+    from telebot.types import (
+        InputMediaPhoto,
+        InputMediaVideo,
+        InputMediaDocument,
+        InputMediaAudio
+    )
 
-def sender():
+    def sender():
 
-    sent_units = 0
-    batch = []
-
-    def flush_batch():
-        """Send batch as single or album (counts as ONE message)"""
-        nonlocal batch, sent_units
-
-        if not batch:
-            return
-
-        try:
-
-            # cancel check BEFORE sending
-            if admin_active_jobs[call.from_user.id]["cancel"]:
-                return
-
-            # single media
-            if len(batch) == 1:
-
-                m = batch[0]
-
-                if isinstance(m, InputMediaPhoto):
-                    bot.send_photo(group_id, m.media, caption=m.caption)
-
-                elif isinstance(m, InputMediaVideo):
-                    bot.send_video(group_id, m.media, caption=m.caption)
-
-                elif isinstance(m, InputMediaDocument):
-                    bot.send_document(group_id, m.media, caption=m.caption)
-
-                elif isinstance(m, InputMediaAudio):
-                    bot.send_audio(group_id, m.media, caption=m.caption)
-
-            else:
-                # album send
-                bot.send_media_group(group_id, batch)
-
-            sent_units += 1
-
-            # progress update every 10 sends
-            if sent_units % 10 == 0:
-                bot.send_message(
-                    call.message.chat.id,
-                    f"📤 Sent messages: {sent_units}"
-                )
-
-            # ⭐ THIS IS THE IMPORTANT PART
-            # wait 1 second AFTER each message/album
-            time.sleep(1)
-
-        except Exception as e:
-            bot.send_message(call.message.chat.id, f"ERROR:\n{e}")
-            print("Send error:", e)
-            time.sleep(2)
-
+        sent_units = 0
         batch = []
 
+        def flush_batch():
+            """Send batch as single or album (counts as ONE message)"""
+            nonlocal batch, sent_units
 
-    for media_id, file_id, file_type, caption in rows:
+            if not batch:
+                return
 
-        # cancel check
-        if admin_active_jobs[call.from_user.id]["cancel"]:
-            bot.send_message(call.message.chat.id, "🛑 Sending cancelled")
-            admin_active_jobs.pop(call.from_user.id, None)
-            return
+            try:
 
-        # build media object
-        if file_type == "photo":
-            batch.append(InputMediaPhoto(file_id, caption=caption))
+                # cancel check BEFORE sending
+                if admin_active_jobs[call.from_user.id]["cancel"]:
+                    return
 
-        elif file_type == "video":
-            batch.append(InputMediaVideo(file_id, caption=caption))
+                # single media
+                if len(batch) == 1:
 
-        elif file_type == "document":
-            batch.append(InputMediaDocument(file_id, caption=caption))
+                    m = batch[0]
 
-        elif file_type == "audio":
-            batch.append(InputMediaAudio(file_id, caption=caption))
+                    if isinstance(m, InputMediaPhoto):
+                        bot.send_photo(group_id, m.media, caption=m.caption)
 
-        # Telegram album max = 10
-        if len(batch) == 10:
-            flush_batch()
+                    elif isinstance(m, InputMediaVideo):
+                        bot.send_video(group_id, m.media, caption=m.caption)
 
-    # send remaining
-    flush_batch()
+                    elif isinstance(m, InputMediaDocument):
+                        bot.send_document(group_id, m.media, caption=m.caption)
 
-    bot.send_message(call.message.chat.id, "✅ All media sent")
+                    elif isinstance(m, InputMediaAudio):
+                        bot.send_audio(group_id, m.media, caption=m.caption)
 
-    admin_active_jobs.pop(call.from_user.id, None)
-    admin_send_state.pop(call.from_user.id, None)
+                else:
+                    # album send
+                    bot.send_media_group(group_id, batch)
+
+                sent_units += 1
+
+                # progress update every 10 sends
+                if sent_units % 10 == 0:
+                    bot.send_message(
+                        call.message.chat.id,
+                        f"📤 Sent messages: {sent_units}"
+                    )
+
+                # ⭐ THIS IS THE IMPORTANT PART
+                # wait 1 second AFTER each message/album
+                time.sleep(1)
+
+            except Exception as e:
+                bot.send_message(call.message.chat.id, f"ERROR:\n{e}")
+                print("Send error:", e)
+                time.sleep(2)
+
+            batch = []
+
+
+        for media_id, file_id, file_type, caption in rows:
+
+            # cancel check
+            if admin_active_jobs[call.from_user.id]["cancel"]:
+                bot.send_message(call.message.chat.id, "🛑 Sending cancelled")
+                admin_active_jobs.pop(call.from_user.id, None)
+                return
+
+            # build media object
+            if file_type == "photo":
+                batch.append(InputMediaPhoto(file_id, caption=caption))
+
+            elif file_type == "video":
+                batch.append(InputMediaVideo(file_id, caption=caption))
+
+            elif file_type == "document":
+                batch.append(InputMediaDocument(file_id, caption=caption))
+
+            elif file_type == "audio":
+                batch.append(InputMediaAudio(file_id, caption=caption))
+
+            # Telegram album max = 10
+            if len(batch) == 10:
+                flush_batch()
+
+        # send remaining
+        flush_batch()
+
+        bot.send_message(call.message.chat.id, "✅ All media sent")
+
+        admin_active_jobs.pop(call.from_user.id, None)
+        admin_send_state.pop(call.from_user.id, None)
 # ================= ADMIN STATS ================= #
 
 @bot.message_handler(commands=['stats'])
