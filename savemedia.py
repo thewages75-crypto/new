@@ -14,7 +14,6 @@ ADMIN_ID = 8305774350  # Your Telegram ID
 user_sessions = {}
 user_timers = {}
 FILES_PER_PAGE = 5
-media_groups = {}
 bot = telebot.TeleBot(BOT_TOKEN)
 session_lock = threading.Lock()
 # ================= DATABASE ================= #
@@ -240,7 +239,6 @@ def handle_media(message):
 
     session = user_sessions[user_id]
 
-    session = user_sessions[user_id]
 
     session["total"] += 1
     if result:
@@ -326,7 +324,7 @@ def callback_handler(call):
             dashboard_text(call.from_user.id),
             call.message.chat.id,
             call.message.message_id,
-            reply_markup=dashboard_markup()
+            reply_markup=dashboard_markup(call.from_user.id)
         )
     elif data == "admin_panel":
         if call.from_user.id != ADMIN_ID:
@@ -342,10 +340,10 @@ def callback_handler(call):
         if call.from_user.id != ADMIN_ID:
             bot.answer_callback_query(call.id, "Unauthorized")
             return
-        conn  == get_connection()
+        conn  = get_connection()
         cur = conn.cursor()
-        cur.execute("SELECT COUNT(*) FROM users FROM users")
-        total_file = cur.fetchone()[0]
+        cur.execute("SELECT COUNT(*) FROM users")
+        total_users = cur.fetchone()[0]
         cur.execute("SELECT COUNT(*) FROM stored_media")
         total_files = cur.fetchone()[0]
         cur.close()
