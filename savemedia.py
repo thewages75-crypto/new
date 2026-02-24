@@ -356,11 +356,12 @@ def callback_handler(call):
         total_files = cur.fetchone()[0]
         cur.close()
         conn.close()
+        total_size = format_size(get_total_storage())
         bot.edit_message_text(
             f"📊 Bot Statistics\n\n"
             f"👥 Total Users: {total_users}\n"
-            f"📦 Total Files: {total_files}\n",
-            f"💾 Total Storage Used: {get_total_storage()}",
+            f"📦 Total Files: {total_files}\n"
+            f"💾 Total Storage Used: {total_size}",
             call.message.chat.id,
             call.message.message_id,
             reply_markup=admin_panel_markup()
