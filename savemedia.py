@@ -143,19 +143,21 @@ def finalize_user_upload(user_id, chat_id):
 
     total = get_total_files(user_id)
 
+    # If duplicates exist → show detailed breakdown
     if session["duplicate"] > 0:
         bot.send_message(
             chat_id,
-            f"📦 Upload Processed\n\n"
-            f"Total Media: {session['total']}\n"
+            f"📦 Upload Completed\n\n"
+            f"Total Sent: {session['total']}\n"
             f"✅ Saved: {session['saved']}\n"
-            f"♻️ Duplicates: {session['duplicate']}\n\n"
+            f"♻️ Skipped (Duplicates): {session['duplicate']}\n\n"
             f"📦 Total Files: {total}"
         )
     else:
+        # Clean minimal confirmation
         bot.send_message(
             chat_id,
-            f"✅ Saved Successfully\n"
+            f"✅ {session['saved']} file(s) saved\n"
             f"📦 Total Files: {total}"
         )
 
