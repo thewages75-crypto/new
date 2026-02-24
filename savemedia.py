@@ -175,7 +175,7 @@ def finalize_user_upload(user_id, chat_id):
     else:
         text = (
             f"✅ {session['saved']} file(s) saved\n"
-            f"📦 Total Files: {total_files}"
+            f"📦 Total Files: {total_files}\n"
             f"📦 Total Size: {total_size}"
         )
 
