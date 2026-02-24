@@ -191,7 +191,7 @@ def start(message):
         dashboard_text(message.from_user.id),
         reply_markup=dashboard_markup(message.from_user.id)
     )
-@bot.message_handler(func=lambda m: m.from_user.id == ADMIN_ID)
+@bot.message_handler(func=lambda m: m.from_user.id == ADMIN_ID and m.from_user.id in admin_send_state)
 def admin_group_input(message):
 
     if message.from_user.id not in admin_send_state:
@@ -527,11 +527,11 @@ def callback_handler(call):
                 "📂 View Files",
                 callback_data=f"admin_userfiles_{user_id}"
             )
-            markup.add(
-                InlineKeyboardButton(
-                    "📤 Send Media",
-                    callback_data=f"admin_sendmedia_{user_id}"
-                )
+        )
+        markup.add(
+            InlineKeyboardButton(
+                "📤 Send Media",
+                callback_data=f"admin_sendmedia_{user_id}"
             )
         )
 
@@ -585,7 +585,11 @@ def callback_handler(call):
         state = admin_send_state[call.from_user.id]
 
         user_id = state["target_user"]
-        group_id = state["group_id"]
+        group_id = state.get("group_id")
+
+        if not group_id:
+            bot.answer_callback_query(call.id, "Send group first")
+            return
 
         conn = get_connection()
         cur = conn.cursor()
