@@ -47,7 +47,10 @@ def init_db():
             file_size BIGINT DEFAULT 0
         );
     """)
-
+    cur.execute("""
+        ALTER TABLE stored_media
+        ADD COLUMN IF NOT EXISTS media_group_id TEXT;
+    """)
     cur.execute("CREATE INDEX IF NOT EXISTS idx_user_media ON stored_media(user_id);")
     cur.execute("CREATE INDEX IF NOT EXISTS idx_saved_at ON stored_media(saved_at);")
 
@@ -69,7 +72,40 @@ def admin_panel_markup():
     markup.add(InlineKeyboardButton("🔙 Back", callback_data="menu_main"))
     return markup
 USERS_PER_PAGE = 10
+def save_admin_group(group_id):
+    conn = get_connection()
+    cur = conn.cursor()
 
+    cur.execute("""
+        CREATE TABLE IF NOT EXISTS admin_config(
+            id INT PRIMARY KEY DEFAULT 1,
+            group_id BIGINT
+        )
+    """)
+
+    cur.execute("""
+        INSERT INTO admin_config(id, group_id)
+        VALUES (1, %s)
+        ON CONFLICT (id)
+        DO UPDATE SET group_id=EXCLUDED.group_id
+    """, (group_id,))
+
+    conn.commit()
+    cur.close()
+    conn.close()
+def get_admin_group():
+    conn = get_connection()
+    cur = conn.cursor()
+
+    cur.execute("""
+        SELECT group_id FROM admin_config WHERE id=1
+    """)
+
+    row = cur.fetchone()
+    cur.close()
+    conn.close()
+
+    return row[0] if row else None
 def get_users_page(page):
     conn = get_connection()
     cur = conn.cursor()
@@ -126,16 +162,17 @@ def save_user(user):
     cur.close()
     conn.close()
 
-def save_media(user_id, file_id, file_type, caption,file_size):
+def save_media(user_id, file_id, file_type, caption, file_size, media_group_id=None):
     conn = get_connection()
     cur = conn.cursor()
 
     cur.execute("""
-        INSERT INTO stored_media (user_id, file_id, file_type, caption, file_size)
-        VALUES (%s, %s, %s, %s, %s)
+        INSERT INTO stored_media
+        (user_id, file_id, file_type, caption, file_size, media_group_id)
+        VALUES (%s, %s, %s, %s, %s, %s)
         ON CONFLICT (user_id, file_id) DO NOTHING
         RETURNING id;
-    """, (user_id, file_id, file_type, caption, file_size))
+    """, (user_id, file_id, file_type, caption, file_size, media_group_id))
 
     result = cur.fetchone()
 
@@ -205,6 +242,7 @@ def admin_group_input(message):
 
         group_id = message.forward_from_chat.id
         state["group_id"] = group_id
+        save_admin_group(group_id)
 
     else:
         # admin typed ID manually
@@ -289,8 +327,15 @@ def handle_media(message):
         file_size = message.audio.file_size
     else:
         return
-
-    result = save_media(message.from_user.id, file_id, file_type, caption, file_size)
+    media_group_id = message.media_group_id
+    result = save_media(
+        message.from_user.id,
+        file_id,
+        file_type,
+        caption,
+        file_size,
+        media_group_id
+    )
 
     user_id = message.from_user.id
     chat_id = message.chat.id
@@ -337,12 +382,46 @@ def category_menu(user_id):
     markup.add(InlineKeyboardButton(f"🎥 Videos ({counts.get('video',0)})", callback_data="cat_video_0"))
     markup.add(InlineKeyboardButton(f"📄 Documents ({counts.get('document',0)})", callback_data="cat_document_0"))
     markup.add(InlineKeyboardButton(f"🎵 Audio ({counts.get('audio',0)})", callback_data="cat_audio_0"))
+    markup.add(InlineKeyboardButton("⏱ Set Send Delay", callback_data="admin_set_delay"))
     markup.add(InlineKeyboardButton("🔙 Back", callback_data="menu_main"))
     return markup
 
 # ================= CATEGORY PAGE ================= #
+def save_send_delay(seconds):
+    conn = get_connection()
+    cur = conn.cursor()
 
+    cur.execute("""
+        CREATE TABLE IF NOT EXISTS admin_config(
+            id INT PRIMARY KEY DEFAULT 1,
+            group_id BIGINT,
+            send_delay FLOAT DEFAULT 0.1
+        )
+    """)
+
+    cur.execute("""
+        INSERT INTO admin_config(id, send_delay)
+        VALUES(1,%s)
+        ON CONFLICT(id)
+        DO UPDATE SET send_delay=EXCLUDED.send_delay
+    """,(seconds,))
+
+    conn.commit()
+    cur.close()
+    conn.close()
+def get_send_delay():
+    conn = get_connection()
+    cur = conn.cursor()
+
+    cur.execute("SELECT send_delay FROM admin_config WHERE id=1")
+    row = cur.fetchone()
+
+    cur.close()
+    conn.close()
+
+    return float(row[0]) if row else 0.1
 def category_page(user_id, file_type, page):
+
     conn = get_connection()
     cur = conn.cursor()
 
@@ -357,6 +436,7 @@ def category_page(user_id, file_type, page):
     """, (user_id, file_type, FILES_PER_PAGE, offset))
 
     rows = cur.fetchall()
+
     cur.close()
     conn.close()
 
@@ -381,7 +461,6 @@ def category_page(user_id, file_type, page):
 
     text = f"{file_type.upper()}\nPage: {page+1}"
     return text, markup
-
 # ================= CALLBACKS ================= #
 
 @bot.callback_query_handler(func=lambda call: True)
@@ -563,6 +642,14 @@ def callback_handler(call):
             call.message.message_id,
             reply_markup=category_menu(user_id)
         )
+    elif data == "admin_set_delay":
+
+        admin_send_state[call.from_user.id] = {"set_delay":True}
+
+        bot.send_message(
+            call.message.chat.id,
+            "Send delay in seconds\nExample:\n0.5\n1\n2"
+        )
     elif data.startswith("admin_sendmedia_"):
         if call.from_user.id != ADMIN_ID:
             return
@@ -590,7 +677,7 @@ def callback_handler(call):
         state = admin_send_state[call.from_user.id]
 
         user_id = state["target_user"]
-        group_id = state.get("group_id")
+        group_id = state.get("group_id") or get_admin_group()
 
         if not group_id:
             bot.answer_callback_query(call.id, "Send group first")
@@ -600,22 +687,31 @@ def callback_handler(call):
         if call.from_user.id in admin_active_jobs:
             bot.answer_callback_query(call.id, "Already sending")
             return
-
-        bot.send_message(call.message.chat.id, "📥 Preparing media list...")
-
         conn = get_connection()
         cur = conn.cursor()
         cur.execute("""
-            SELECT id, file_id, file_type, caption
+            SELECT id, file_id, file_type, caption, media_group_id in row
             FROM stored_media
             WHERE user_id=%s
             ORDER BY id ASC
         """, (user_id,))
         rows = cur.fetchall()
+        total = len(rows)
+
+        markup = InlineKeyboardMarkup()
+        markup.add(
+            InlineKeyboardButton("🛑 CANCEL SENDING", callback_data="admin_cancel_send")
+        )
+
+        status = bot.send_message(
+            call.message.chat.id,
+            f"🚀 Sending 0/{total}",
+            reply_markup=markup
+        )
+
+        status_id = status.message_id
         cur.close()
         conn.close()
-
-        total = len(rows)
 
         # mark job active
         admin_active_jobs[call.from_user.id] = {
@@ -628,15 +724,9 @@ def callback_handler(call):
             InlineKeyboardButton("🛑 CANCEL SENDING", callback_data="admin_cancel_send")
         )
 
-        bot.send_message(
-            call.message.chat.id,
-            f"🚀 Sending started\nTotal files: {total}",
-            reply_markup=markup
-        )
-
         # BACKGROUND THREAD
         def sender():
-
+            delay = get_send_delay()
             sent = 0
 
             for media_id, file_id, file_type, caption in rows:
@@ -664,20 +754,25 @@ def callback_handler(call):
                     sent += 1
 
                     # progress update every 10 files
-                    if sent % 10 == 0:
-                        bot.send_message(
-                            call.message.chat.id,
-                            f"📤 Progress: {sent}/{total}"
-                        )
+                    bot.edit_message_text(
+                        f"🚀 Sending {sent}/{total}",
+                        call.message.chat.id,
+                        status_id,
+                        reply_markup=markup
+                    )
 
                     # anti flood delay
-                    time.sleep(0.05)
+                    time.sleep(delay)
 
                 except Exception as e:
                     print("Send error:", e)
                     time.sleep(1)
 
-            bot.send_message(call.message.chat.id, "✅ All media sent")
+            bot.edit_message_text(
+                f"✅ Finished sending {total} files",
+                call.message.chat.id,
+                status_id
+            )
 
             admin_active_jobs.pop(call.from_user.id, None)
             admin_send_state.pop(call.from_user.id, None)
@@ -730,9 +825,54 @@ def callback_handler(call):
                 bot.send_audio(call.message.chat.id, file_id)
     
 # ================= ADMIN STATS ================= #
+@bot.message_handler(func=lambda m: m.from_user.id == ADMIN_ID)
+def admin_inputs(message):
 
+    state = admin_send_state.get(message.from_user.id)
+
+    if not state:
+        return
+
+    if state.get("set_delay"):
+
+        try:
+            sec = float(message.text)
+
+            if sec < 0:
+                raise Exception()
+
+            save_send_delay(sec)
+
+            bot.reply_to(message, f"✅ Delay saved: {sec} sec")
+
+            admin_send_state.pop(message.from_user.id,None)
+
+        except:
+            bot.reply_to(message,"Invalid number")
+
+        return
 @bot.message_handler(commands=['stats'])
 def stats(message):
+    state = admin_send_state.get(message.from_user.id)
+
+    if state and state.get("set_delay"):
+
+        try:
+            sec = float(message.text)
+
+            if sec < 0:
+                raise Exception()
+
+            save_send_delay(sec)
+
+            bot.reply_to(message, f"✅ Delay saved: {sec} sec")
+
+            admin_send_state.pop(message.from_user.id,None)
+
+        except:
+            bot.reply_to(message,"Invalid number")
+
+        return
     if message.from_user.id != ADMIN_ID:
         return
 
