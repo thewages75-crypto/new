@@ -47,10 +47,6 @@ def init_db():
             file_size BIGINT DEFAULT 0
         );
     """)
-    cur.execute("""
-    ALTER TABLE stored_media
-    ADD COLUMN IF NOT EXISTS media_group_id TEXT;
-    """)
 
     cur.execute("CREATE INDEX IF NOT EXISTS idx_user_media ON stored_media(user_id);")
     cur.execute("CREATE INDEX IF NOT EXISTS idx_saved_at ON stored_media(saved_at);")
@@ -70,8 +66,6 @@ def admin_panel_markup():
     markup.add(InlineKeyboardButton("👥 Total Users", callback_data="admin_users"))
     markup.add(InlineKeyboardButton("📦 Total Files", callback_data="admin_files"))
     markup.add(InlineKeyboardButton("👤 View Users", callback_data="admin_userlist_0"))
-    
-    markup.add(InlineKeyboardButton("⏱ Set Send Delay", callback_data="admin_set_delay"))
     markup.add(InlineKeyboardButton("🔙 Back", callback_data="menu_main"))
     return markup
 USERS_PER_PAGE = 10
@@ -277,9 +271,10 @@ def finalize_user_upload(user_id, chat_id):
 @bot.message_handler(content_types=['photo', 'video', 'document', 'audio'])
 def handle_media(message):
     save_user(message.from_user)
-    media_group_id = message.media_group_id
+
     file_type = message.content_type
     caption = message.caption
+
     if file_type == "photo":
         file_id = message.photo[-1].file_id
         file_size = message.photo[-1].file_size
@@ -295,14 +290,7 @@ def handle_media(message):
     else:
         return
 
-    result = save_media(
-        message.from_user.id,
-        file_id,
-        file_type,
-        caption,
-        file_size,
-        media_group_id
-    )
+    result = save_media(message.from_user.id, file_id, file_type, caption, file_size)
 
     user_id = message.from_user.id
     chat_id = message.chat.id
@@ -353,39 +341,7 @@ def category_menu(user_id):
     return markup
 
 # ================= CATEGORY PAGE ================= #
-def save_send_delay(seconds):
-    conn = get_connection()
-    cur = conn.cursor()
 
-    cur.execute("""
-        CREATE TABLE IF NOT EXISTS admin_config(
-            id INT PRIMARY KEY DEFAULT 1,
-            group_id BIGINT,
-            send_delay FLOAT DEFAULT 0.1
-        )
-    """)
-
-    cur.execute("""
-        INSERT INTO admin_config(id, send_delay)
-        VALUES(1,%s)
-        ON CONFLICT(id)
-        DO UPDATE SET send_delay=EXCLUDED.send_delay
-    """,(seconds,))
-
-    conn.commit()
-    cur.close()
-    conn.close()
-def get_send_delay():
-    conn = get_connection()
-    cur = conn.cursor()
-
-    cur.execute("SELECT send_delay FROM admin_config WHERE id=1")
-    row = cur.fetchone()
-
-    cur.close()
-    conn.close()
-
-    return float(row[0]) if row else 0.1
 def category_page(user_id, file_type, page):
     conn = get_connection()
     cur = conn.cursor()
@@ -607,14 +563,6 @@ def callback_handler(call):
             call.message.message_id,
             reply_markup=category_menu(user_id)
         )
-    elif data == "admin_set_delay":
-
-        admin_send_state[call.from_user.id] = {"set_delay":True}
-
-        bot.send_message(
-            call.message.chat.id,
-            "Send delay in seconds\nExample:\n0.5\n1\n2"
-        )
     elif data.startswith("admin_sendmedia_"):
         if call.from_user.id != ADMIN_ID:
             return
@@ -688,7 +636,6 @@ def callback_handler(call):
 
         # BACKGROUND THREAD
         def sender():
-            delay = get_send_delay()
 
             sent = 0
 
@@ -783,52 +730,7 @@ def callback_handler(call):
                 bot.send_audio(call.message.chat.id, file_id)
     
 # ================= ADMIN STATS ================= #
-    # state = admin_send_state.get(message.from_user.id)
 
-    # if state and state.get("set_delay"):
-
-    #     try:
-    #         sec = float(message.text)
-
-    #         if sec < 0:
-    #             raise Exception()
-
-    #         save_send_delay(sec)
-
-    #         bot.reply_to(message, f"✅ Delay saved: {sec} sec")
-
-    #         admin_send_state.pop(message.from_user.id,None)
-
-    #     except:
-    #         bot.reply_to(message,"Invalid number")
-
-    #     return
-@bot.message_handler(func=lambda m: m.from_user.id == ADMIN_ID)
-def admin_inputs(message):
-
-    state = admin_send_state.get(message.from_user.id)
-
-    if not state:
-        return
-
-    if state.get("set_delay"):
-
-        try:
-            sec = float(message.text)
-
-            if sec < 0:
-                raise Exception()
-
-            save_send_delay(sec)
-
-            bot.reply_to(message, f"✅ Delay saved: {sec} sec")
-
-            admin_send_state.pop(message.from_user.id,None)
-
-        except:
-            bot.reply_to(message,"Invalid number")
-
-        return
 @bot.message_handler(commands=['stats'])
 def stats(message):
     if message.from_user.id != ADMIN_ID:
