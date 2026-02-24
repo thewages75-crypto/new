@@ -202,19 +202,21 @@ def admin_group_input(message):
 
     # detect forwarded message
     if message.forward_from_chat:
-
         group_id = message.forward_from_chat.id
-        state["group_id"] = group_id
-
-    else:
-        # admin typed ID manually
+    elif message.forward_sender_name:
+        bot.reply_to(message, "❌ Forward directly from the group, not anonymous admin.")
+        return
+    elif message.text:
         try:
             group_id = int(message.text)
-            state["group_id"] = group_id
         except:
             bot.reply_to(message, "❌ Invalid group ID")
             return
+    else:
+        bot.reply_to(message, "❌ Send group ID or forward a message from the group.")
+        return
 
+    state["group_id"] = group_id
     markup = InlineKeyboardMarkup()
     markup.add(
         InlineKeyboardButton(
@@ -591,6 +593,19 @@ def callback_handler(call):
             InputMediaPhoto, InputMediaVideo,
             InputMediaDocument, InputMediaAudio
         )
+        markup = InlineKeyboardMarkup()
+        markup.add(
+            InlineKeyboardButton(
+                "🛑 CANCEL SENDING",
+                callback_data="admin_cancel_send"
+            )
+        )
+
+        bot.send_message(
+            call.message.chat.id,
+            f"🚀 Sending {len(rows)} files...",
+            reply_markup=markup
+        )
 
         def sender():
 
@@ -625,7 +640,6 @@ def callback_handler(call):
                 time.sleep(1)   # ⭐ one second per send
 
             for file_id, t, caption in rows:
-
                 if admin_active_jobs[call.from_user.id]["cancel"]:
                     bot.send_message(call.message.chat.id, "🛑 Cancelled")
                     return
