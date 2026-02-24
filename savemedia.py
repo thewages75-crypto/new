@@ -170,13 +170,13 @@ def finalize_user_upload(user_id, chat_id):
             f"✅ Saved: {session['saved']}\n"
             f"♻️ Skipped (Duplicates): {session['duplicate']}\n\n"
             f"📦 Total Files: {total_files}\n"
-            f"📦 Total Size: {total_size}"
+            f"💾 Total Size: {total_size}"
         )
     else:
         text = (
             f"✅ {session['saved']} file(s) saved\n"
             f"📦 Total Files: {total_files}\n"
-            f"📦 Total Size: {total_size}"
+            f"💾 Total Size: {total_size}"
         )
 
     bot.edit_message_text(
@@ -213,13 +213,13 @@ def handle_media(message):
     chat_id = message.chat.id
 
     if user_id not in user_sessions:
-        processing_msg = bot.send_message(chat_id, "⏳ Processing uploads...")
+        # processing_msg = bot.send_message(chat_id, "⏳ Processing uploads...")
 
         user_sessions[user_id] = {
             "total": 0,
             "saved": 0,
             "duplicate": 0,
-            "message_id": processing_msg.message_id
+            "message_id": bot.send_message(chat_id, "⏳ Processing uploads...").message_id
         }
 
     session = user_sessions[user_id]
