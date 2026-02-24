@@ -47,6 +47,10 @@ def init_db():
             file_size BIGINT DEFAULT 0
         );
     """)
+    cur.execute("""
+    ALTER TABLE stored_media
+    ADD COLUMN IF NOT EXISTS media_group_id TEXT;
+    """)
 
     cur.execute("CREATE INDEX IF NOT EXISTS idx_user_media ON stored_media(user_id);")
     cur.execute("CREATE INDEX IF NOT EXISTS idx_saved_at ON stored_media(saved_at);")
@@ -273,10 +277,9 @@ def finalize_user_upload(user_id, chat_id):
 @bot.message_handler(content_types=['photo', 'video', 'document', 'audio'])
 def handle_media(message):
     save_user(message.from_user)
-
+    media_group_id = message.media_group_id
     file_type = message.content_type
     caption = message.caption
-
     if file_type == "photo":
         file_id = message.photo[-1].file_id
         file_size = message.photo[-1].file_size
@@ -292,7 +295,14 @@ def handle_media(message):
     else:
         return
 
-    result = save_media(message.from_user.id, file_id, file_type, caption, file_size)
+    result = save_media(
+        message.from_user.id,
+        file_id,
+        file_type,
+        caption,
+        file_size,
+        media_group_id
+    )
 
     user_id = message.from_user.id
     chat_id = message.chat.id
@@ -773,9 +783,35 @@ def callback_handler(call):
                 bot.send_audio(call.message.chat.id, file_id)
     
 # ================= ADMIN STATS ================= #
+    # state = admin_send_state.get(message.from_user.id)
+
+    # if state and state.get("set_delay"):
+
+    #     try:
+    #         sec = float(message.text)
+
+    #         if sec < 0:
+    #             raise Exception()
+
+    #         save_send_delay(sec)
+
+    #         bot.reply_to(message, f"✅ Delay saved: {sec} sec")
+
+    #         admin_send_state.pop(message.from_user.id,None)
+
+    #     except:
+    #         bot.reply_to(message,"Invalid number")
+
+    #     return
+@bot.message_handler(func=lambda m: m.from_user.id == ADMIN_ID)
+def admin_inputs(message):
+
     state = admin_send_state.get(message.from_user.id)
 
-    if state and state.get("set_delay"):
+    if not state:
+        return
+
+    if state.get("set_delay"):
 
         try:
             sec = float(message.text)
