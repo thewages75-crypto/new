@@ -54,6 +54,15 @@ def init_db():
     conn.close()
     
 # ================= ADMIN PANEL Helper ================= #
+conn = get_connection()
+cur = conn.cursor()
+cur.execute("SELECT username FROM users WHERE user_id=%s", (user_id,))
+row = cur.fetchone()
+cur.close()
+conn.close()
+
+username = f"@{row[0]}" if row and row[0] else "No username"
+
 def admin_panel_text():
     return "🛠 Admin Panel\n\nSelect an option:"
 
@@ -475,6 +484,7 @@ def callback_handler(call):
 
         text = (
             f"👤 User ID: {user_id}\n\n"
+            f"👤 {username}\n"
             f"📦 Total Files: {total}\n"
             f"📷 Photos: {cats.get('photo',0)}\n"
             f"🎥 Videos: {cats.get('video',0)}\n"
