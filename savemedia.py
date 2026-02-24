@@ -53,7 +53,18 @@ def init_db():
     conn.commit()
     cur.close()
     conn.close()
+    
+# ================= ADMIN PANEL Helper ================= #
+def admin_panel_text():
+    return "🛠 Admin Panel\n\nSelect an option:"
 
+def admin_panel_markup():
+    markup = InlineKeyboardMarkup()
+    markup.add(InlineKeyboardButton("📊 Bot Stats", callback_data="admin_stats"))
+    markup.add(InlineKeyboardButton("👥 Total Users", callback_data="admin_users"))
+    markup.add(InlineKeyboardButton("📦 Total Files", callback_data="admin_files"))
+    markup.add(InlineKeyboardButton("🔙 Back", callback_data="menu_main"))
+    return markup
 # ================= DB HELPERS ================= #
 def get_storage_used(user_id):
     conn = get_connection()
@@ -132,9 +143,13 @@ def dashboard_text(user_id):
     total_size = format_size(get_storage_used(user_id))
     return f"📦 Cloud Vault\n\n📊 Your Storage:\n• Total Files: {total_files}\n\nChoose an option:"
 
-def dashboard_markup():
+def dashboard_markup(user_id):
     markup = InlineKeyboardMarkup()
     markup.add(InlineKeyboardButton("📁 My Files", callback_data="menu_files"))
+
+    if user_id == ADMIN_ID:
+        markup.add(InlineKeyboardButton("🛠 Admin Panel", callback_data="admin_panel"))
+
     return markup
 
 @bot.message_handler(commands=['start'])
@@ -143,7 +158,7 @@ def start(message):
     bot.send_message(
         message.chat.id,
         dashboard_text(message.from_user.id),
-        reply_markup=dashboard_markup()
+        reply_markup=dashboard_markup(message.from_user.id)
     )
 
 # ================= AUTO SAVE ================= #
@@ -305,7 +320,7 @@ def category_page(user_id, file_type, page):
 @bot.callback_query_handler(func=lambda call: True)
 def callback_handler(call):
     data = call.data
-
+    
     if data == "menu_main":
         bot.edit_message_text(
             dashboard_text(call.from_user.id),
@@ -313,7 +328,36 @@ def callback_handler(call):
             call.message.message_id,
             reply_markup=dashboard_markup()
         )
-
+    elif data == "admin_panel":
+        if call.from_user.id != ADMIN_ID:
+            bot.answer_callback_query(call.id, "Unauthorized")
+            return
+        bot.edit_message_text(
+            admin_panel_text(),
+            call.message.chat.id,
+            call.message.message_id,
+            reply_markup=admin_panel_markup()
+        )
+    elif data == "admin_stats":
+        if call.from_user.id != ADMIN_ID:
+            bot.answer_callback_query(call.id, "Unauthorized")
+            return
+        conn  == get_connection()
+        cur = conn.cursor()
+        cur.execute("SELECT COUNT(*) FROM users FROM users")
+        total_file = cur.fetchone()[0]
+        cur.execute("SELECT COUNT(*) FROM stored_media")
+        total_files = cur.fetchone()[0]
+        cur.close()
+        conn.close()
+        bot.edit_message_text(
+            f"📊 Bot Statistics\n\n"
+            f"👥 Total Users: {total_file}\n"
+            f"📦 Total Files: {total_files}",
+            call.message.chat.id,
+            call.message.message_id,
+            reply_markup=admin_panel_markup()
+        )
     elif data == "menu_files":
         bot.edit_message_text(
             "📂 Select Category",
@@ -357,7 +401,7 @@ def callback_handler(call):
                 bot.send_document(call.message.chat.id, file_id)
             elif file_type == "audio":
                 bot.send_audio(call.message.chat.id, file_id)
-
+    
 # ================= ADMIN STATS ================= #
 
 @bot.message_handler(commands=['stats'])
