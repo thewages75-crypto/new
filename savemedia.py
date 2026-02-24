@@ -16,6 +16,7 @@ user_timers = {}
 FILES_PER_PAGE = 5
 bot = telebot.TeleBot(BOT_TOKEN)
 session_lock = threading.Lock()
+admin_send_state = {}
 # ================= DATABASE ================= #
 
 def get_connection():
@@ -54,14 +55,6 @@ def init_db():
     conn.close()
     
 # ================= ADMIN PANEL Helper ================= #
-conn = get_connection()
-cur = conn.cursor()
-cur.execute("SELECT username FROM users WHERE user_id=%s", (user_id,))
-row = cur.fetchone()
-cur.close()
-conn.close()
-
-username = f"@{row[0]}" if row and row[0] else "No username"
 
 def admin_panel_text():
     return "🛠 Admin Panel\n\nSelect an option:"
@@ -198,7 +191,43 @@ def start(message):
         dashboard_text(message.from_user.id),
         reply_markup=dashboard_markup(message.from_user.id)
     )
+@bot.message_handler(func=lambda m: m.from_user.id == ADMIN_ID)
+def admin_group_input(message):
 
+    if message.from_user.id not in admin_send_state:
+        return
+
+    state = admin_send_state[message.from_user.id]
+
+    # detect forwarded message
+    if message.forward_from_chat:
+
+        group_id = message.forward_from_chat.id
+        state["group_id"] = group_id
+
+    else:
+        # admin typed ID manually
+        try:
+            group_id = int(message.text)
+            state["group_id"] = group_id
+        except:
+            bot.reply_to(message, "❌ Invalid group ID")
+            return
+
+    markup = InlineKeyboardMarkup()
+    markup.add(
+        InlineKeyboardButton(
+            "🚀 SEND ALL MEDIA NOW",
+            callback_data="admin_confirm_send"
+        )
+    )
+
+    bot.send_message(
+        message.chat.id,
+        f"✅ Group saved: `{group_id}`\nPress button to send media",
+        parse_mode="Markdown",
+        reply_markup=markup
+    )
 # ================= AUTO SAVE ================= #
 
 import threading
@@ -484,7 +513,6 @@ def callback_handler(call):
 
         text = (
             f"👤 User ID: {user_id}\n\n"
-            f"👤 {username}\n"
             f"📦 Total Files: {total}\n"
             f"📷 Photos: {cats.get('photo',0)}\n"
             f"🎥 Videos: {cats.get('video',0)}\n"
@@ -498,6 +526,12 @@ def callback_handler(call):
             InlineKeyboardButton(
                 "📂 View Files",
                 callback_data=f"admin_userfiles_{user_id}"
+            )
+            markup.add(
+                InlineKeyboardButton(
+                    "📤 Send Media",
+                    callback_data=f"admin_sendmedia_{user_id}"
+                )
             )
         )
 
@@ -528,6 +562,68 @@ def callback_handler(call):
             call.message.message_id,
             reply_markup=category_menu(user_id)
         )
+    elif data.startswith("admin_sendmedia_"):
+        if call.from_user.id != ADMIN_ID:
+            return
+
+        user_id = int(data.split("_")[-1])
+
+        admin_send_state[call.from_user.id] = {
+            "target_user": user_id
+        }
+
+        bot.send_message(
+            call.message.chat.id,
+            "📩 Forward ANY message from the target group\n\n"
+            "OR send the group ID."
+        )
+    elif data == "admin_confirm_send":
+
+        if call.from_user.id not in admin_send_state:
+            return
+
+        state = admin_send_state[call.from_user.id]
+
+        user_id = state["target_user"]
+        group_id = state["group_id"]
+
+        conn = get_connection()
+        cur = conn.cursor()
+
+        cur.execute("""
+            SELECT file_id, file_type, caption
+            FROM stored_media
+            WHERE user_id=%s
+            ORDER BY id ASC
+        """, (user_id,))
+
+        rows = cur.fetchall()
+        cur.close()
+        conn.close()
+
+        bot.send_message(call.message.chat.id, f"🚀 Sending {len(rows)} files...")
+
+        for file_id, file_type, caption in rows:
+
+            try:
+                if file_type == "photo":
+                    bot.send_photo(group_id, file_id, caption=caption)
+
+                elif file_type == "video":
+                    bot.send_video(group_id, file_id, caption=caption)
+
+                elif file_type == "document":
+                    bot.send_document(group_id, file_id, caption=caption)
+
+                elif file_type == "audio":
+                    bot.send_audio(group_id, file_id, caption=caption)
+
+            except Exception as e:
+                print("Send error:", e)
+
+        bot.send_message(call.message.chat.id, "✅ Done sending media")
+
+        admin_send_state.pop(call.from_user.id, None)
     elif data == "menu_files":
         bot.edit_message_text(
             "📂 Select Category",
