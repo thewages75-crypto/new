@@ -70,6 +70,45 @@ def init_db():
     conn.close()
     
 # ================= ADMIN PANEL Helper ================= #
+def get_user_pending_breakdown(user_id):
+    conn = get_connection()
+    cur = conn.cursor()
+
+    cur.execute("""
+        SELECT sm.file_type, COUNT(*)
+        FROM transfer_queue tq
+        JOIN stored_media sm ON sm.id = tq.media_id
+        WHERE tq.transferred = FALSE
+        AND sm.user_id = %s
+        GROUP BY sm.file_type
+    """, (user_id,))
+
+    rows = cur.fetchall()
+    cur.close()
+    conn.close()
+
+    breakdown = {row[0]: row[1] for row in rows}
+    total = sum(breakdown.values())
+
+    return total, breakdown
+def get_users_with_pending():
+    conn = get_connection()
+    cur = conn.cursor()
+
+    cur.execute("""
+        SELECT u.user_id, u.username, COUNT(tq.id) as pending_count
+        FROM transfer_queue tq
+        JOIN stored_media sm ON sm.id = tq.media_id
+        JOIN users u ON u.user_id = sm.user_id
+        WHERE tq.transferred = FALSE
+        GROUP BY u.user_id, u.username
+        ORDER BY pending_count DESC
+    """)
+
+    rows = cur.fetchall()
+    cur.close()
+    conn.close()
+    return rows
 def get_user_groups(user_id):
     conn = get_connection()
     cur = conn.cursor()
@@ -91,6 +130,7 @@ def admin_panel_markup():
     markup.add(InlineKeyboardButton("📦 Total Files", callback_data="admin_files"))
     markup.add(InlineKeyboardButton("👤 View Users", callback_data="admin_userlist_0"))
     markup.add(InlineKeyboardButton("🚀 Send Pending", callback_data="admin_send_pending"))
+    InlineKeyboardButton("🚀 Send Pending Media", callback_data="admin_pending_users")
     markup.add(InlineKeyboardButton("🔙 Back", callback_data="menu_main"))
     return markup
 USERS_PER_PAGE = 10
@@ -123,6 +163,41 @@ def get_total_storage():
     conn.close()
     return total_size
 # ================= DB HELPERS ================= #
+def send_user_pending_media(user_id):
+    conn = get_connection()
+    cur = conn.cursor()
+
+    cur.execute("""
+        SELECT tq.id, sm.file_id, sm.file_type, tq.group_id
+        FROM transfer_queue tq
+        JOIN stored_media sm ON sm.id = tq.media_id
+        WHERE tq.transferred = FALSE
+        AND sm.user_id = %s
+    """, (user_id,))
+
+    rows = cur.fetchall()
+
+    for queue_id, file_id, file_type, group_id in rows:
+        try:
+            if file_type == "photo":
+                bot.send_photo(group_id, file_id)
+            elif file_type == "video":
+                bot.send_video(group_id, file_id)
+            elif file_type == "document":
+                bot.send_document(group_id, file_id)
+            elif file_type == "audio":
+                bot.send_audio(group_id, file_id)
+
+            cur.execute(
+                "UPDATE transfer_queue SET transferred = TRUE WHERE id = %s",
+                (queue_id,)
+            )
+        except Exception as e:
+            print("Send error:", e)
+
+    conn.commit()
+    cur.close()
+    conn.close()
 def get_storage_used(user_id):
     conn = get_connection()
     cur = conn.cursor()
@@ -480,7 +555,7 @@ def callback_handler(call):
         bot.edit_message_text(
             f"👥 Total Users: {total_users}",
             call.message.chat.id,
-            call.message.message_id,
+            call.messageADMIN.message_id,
             reply_markup=admin_panel_markup()
         )
     elif data == "admin_files":
@@ -542,6 +617,83 @@ def callback_handler(call):
         send_pending_media()
 
         bot.answer_callback_query(call.id, "Pending media sent")
+    elif data == "admin_pending_users":
+        if call.from_user.id != ADMIN_ID:
+            return
+
+        users = get_users_with_pending()
+
+        if not users:
+            bot.answer_callback_query(call.id, "No pending media")
+            return
+
+        markup = InlineKeyboardMarkup()
+
+        for user_id, username, count in users:
+            display = f"@{username}" if username else f"User {user_id}"
+            markup.add(
+                InlineKeyboardButton(
+                    f"{display} ({count})",
+                    callback_data=f"admin_user_pending_{user_id}"
+                )
+            )
+
+        markup.add(InlineKeyboardButton("🔙 Back", callback_data="admin_panel"))
+
+        bot.edit_message_text(
+            "👥 Users With Pending Media:",
+            call.message.chat.id,
+            call.message.message_id,
+            reply_markup=markup
+        )
+    elif data.startswith("admin_user_pending_"):
+        if call.from_user.id != ADMIN_ID:
+            return
+
+        user_id = int(data.split("_")[-1])
+        total, breakdown = get_user_pending_breakdown(user_id)
+
+        text = f"📦 Pending Media\n\nTotal: {total}\n\n"
+        text += f"📷 Photos: {breakdown.get('photo', 0)}\n"
+        text += f"🎥 Videos: {breakdown.get('video', 0)}\n"
+        text += f"📄 Documents: {breakdown.get('document', 0)}\n"
+        text += f"🎵 Audio: {breakdown.get('audio', 0)}\n"
+
+        markup = InlineKeyboardMarkup()
+        markup.add(
+            InlineKeyboardButton(
+                "🚀 Send To Group",
+                callback_data=f"admin_send_user_{user_id}"
+            )
+        )
+        markup.add(
+            InlineKeyboardButton(
+                "🔙 Back",
+                callback_data="admin_pending_users"
+            )
+        )
+
+        bot.edit_message_text(
+            text,
+            call.message.chat.id,
+            call.message.message_id,
+            reply_markup=markup
+        )
+    elif data.startswith("admin_send_user_"):
+        if call.from_user.id != ADMIN_ID:
+            return
+
+        user_id = int(data.split("_")[-1])
+        send_user_pending_media(user_id)
+
+        bot.answer_callback_query(call.id, "Media sent successfully")
+
+        bot.edit_message_text(
+            "✅ Media sent to group.",
+            call.message.chat.id,
+            call.message.message_id,
+            reply_markup=admin_panel_markup()
+        )
     elif data == "menu_files":
         bot.edit_message_text(
             "📂 Select Category",
