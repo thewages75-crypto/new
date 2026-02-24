@@ -40,6 +40,7 @@ def init_db():
             file_id TEXT NOT NULL,
             file_type TEXT NOT NULL,
             caption TEXT,
+            transferred BOOLEAN DEFAULT FALSE,
             saved_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
             UNIQUE(user_id, file_id),
             file_size BIGINT DEFAULT 0
@@ -63,9 +64,53 @@ def admin_panel_markup():
     markup.add(InlineKeyboardButton("👥 Total Users", callback_data="admin_users"))
     markup.add(InlineKeyboardButton("📦 Total Files", callback_data="admin_files"))
     markup.add(InlineKeyboardButton("👤 View Users", callback_data="admin_userlist_0"))
+    markup.add(InlineKeyboardButton("📤 Send Pending", callback_data="admin_pending_users"))
     markup.add(InlineKeyboardButton("🔙 Back", callback_data="menu_main"))
     return markup
 USERS_PER_PAGE = 10
+def get_user_pending_stats(user_id):
+    conn = get_connection()
+    cur = conn.cursor()
+
+    cur.execute("""
+        SELECT file_type, COUNT(*)
+        FROM stored_media
+        WHERE user_id = %s AND transferred = FALSE
+        GROUP BY file_type
+    """, (user_id,))
+
+    breakdown = dict(cur.fetchall())
+
+    cur.execute("""
+        SELECT COUNT(*)
+        FROM stored_media
+        WHERE user_id = %s AND transferred = FALSE
+    """, (user_id,))
+
+    total = cur.fetchone()[0]
+
+    cur.close()
+    conn.close()
+
+    return total, breakdown
+def get_users_with_pending():
+    conn = get_connection()
+    cur = conn.cursor()
+
+    cur.execute("""
+        SELECT u.user_id, u.username, COUNT(sm.id)
+        FROM stored_media sm
+        JOIN users u ON u.user_id = sm.user_id
+        WHERE sm.transferred = FALSE
+        GROUP BY u.user_id, u.username
+        ORDER BY COUNT(sm.id) DESC
+    """)
+
+    rows = cur.fetchall()
+    cur.close()
+    conn.close()
+
+    return rows
 def get_all_users():
     conn = get_connection()
     cur = conn.cursor()
@@ -524,6 +569,116 @@ def callback_handler(call):
             call.message.message_id,
             reply_markup=markup
         )
+    elif data == "admin_pending_users":
+        if call.from_user.id != ADMIN_ID:
+            return
+
+        users = get_users_with_pending()
+
+        text = "📤 Users With Pending Media\n\n"
+        markup = InlineKeyboardMarkup()
+
+        for user_id, username, count in users:
+            name = f"@{username}" if username else str(user_id)
+            text += f"{name} — {count} media\n"
+
+            markup.add(
+                InlineKeyboardButton(
+                    f"{name} ({count})",
+                    callback_data=f"admin_pending_user_{user_id}"
+                )
+            )
+
+        markup.add(InlineKeyboardButton("🔙 Back", callback_data="admin_panel"))
+
+        bot.edit_message_text(
+            text,
+            call.message.chat.id,
+            call.message.message_id,
+            reply_markup=markup
+        )
+    elif data.startswith("admin_pending_user_"):
+        if call.from_user.id != ADMIN_ID:
+            return
+
+        user_id = int(data.split("_")[-1])
+
+        total, breakdown = get_user_pending_stats(user_id)
+
+        text = (
+            f"📤 Pending Media For User {user_id}\n\n"
+            f"Total: {total}\n"
+            f"📷 Photos: {breakdown.get('photo', 0)}\n"
+            f"🎥 Videos: {breakdown.get('video', 0)}\n"
+            f"📄 Documents: {breakdown.get('document', 0)}\n"
+            f"🎵 Audio: {breakdown.get('audio', 0)}\n"
+        )
+
+        markup = InlineKeyboardMarkup()
+        markup.add(
+            InlineKeyboardButton(
+                "🚀 Send To Group",
+                callback_data=f"admin_send_user_{user_id}"
+            )
+        )
+        markup.add(
+            InlineKeyboardButton("🔙 Back", callback_data="admin_pending_users")
+        )
+
+        bot.edit_message_text(
+            text,
+            call.message.chat.id,
+            call.message.message_id,
+            reply_markup=markup
+        )
+    elif data.startswith("admin_send_user_"):
+        if call.from_user.id != ADMIN_ID:
+            return
+
+        user_id = int(data.split("_")[-1])
+
+        # ⚠ Hardcode group for now
+        TARGET_GROUP_ID = 90  # Replace with real group ID
+
+        conn = get_connection()
+        cur = conn.cursor()
+
+        cur.execute("""
+            SELECT id, file_id, file_type
+            FROM stored_media
+            WHERE user_id = %s AND transferred = FALSE
+        """, (user_id,))
+
+        rows = cur.fetchall()
+
+        sent = 0
+
+        for media_id, file_id, file_type in rows:
+            try:
+                if file_type == "photo":
+                    bot.send_photo(TARGET_GROUP_ID, file_id)
+                elif file_type == "video":
+                    bot.send_video(TARGET_GROUP_ID, file_id)
+                elif file_type == "document":
+                    bot.send_document(TARGET_GROUP_ID, file_id)
+                elif file_type == "audio":
+                    bot.send_audio(TARGET_GROUP_ID, file_id)
+
+                cur.execute(
+                    "UPDATE stored_media SET transferred = TRUE WHERE id = %s",
+                    (media_id,)
+                )
+
+                sent += 1
+
+            except Exception as e:
+                print("Send error:", e)
+
+        conn.commit()
+        cur.close()
+        conn.close()
+
+        bot.answer_callback_query(call.id, f"Sent {sent} media")
     elif data == "menu_files":
         bot.edit_message_text(
             "📂 Select Category",
