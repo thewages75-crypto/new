@@ -646,19 +646,23 @@ from telebot.types import (
 
 def sender():
 
-    sent = 0
+    sent_units = 0
     batch = []
 
     def flush_batch():
-        """Send current batch either as album or single"""
-        nonlocal batch
+        """Send batch as single or album (counts as ONE message)"""
+        nonlocal batch, sent_units
 
         if not batch:
             return
 
         try:
 
-            # If only 1 file → send normally
+            # cancel check BEFORE sending
+            if admin_active_jobs[call.from_user.id]["cancel"]:
+                return
+
+            # single media
             if len(batch) == 1:
 
                 m = batch[0]
@@ -676,12 +680,25 @@ def sender():
                     bot.send_audio(group_id, m.media, caption=m.caption)
 
             else:
-                # multiple → send album
+                # album send
                 bot.send_media_group(group_id, batch)
+
+            sent_units += 1
+
+            # progress update every 10 sends
+            if sent_units % 10 == 0:
+                bot.send_message(
+                    call.message.chat.id,
+                    f"📤 Sent messages: {sent_units}"
+                )
+
+            # ⭐ THIS IS THE IMPORTANT PART
+            # wait 1 second AFTER each message/album
+            time.sleep(1)
 
         except Exception as e:
             print("Send error:", e)
-            time.sleep(1)
+            time.sleep(2)
 
         batch = []
 
@@ -694,48 +711,30 @@ def sender():
             admin_active_jobs.pop(call.from_user.id, None)
             return
 
-        try:
+        # build media object
+        if file_type == "photo":
+            batch.append(InputMediaPhoto(file_id, caption=caption))
 
-            # build media object
-            if file_type == "photo":
-                batch.append(InputMediaPhoto(file_id, caption=caption))
+        elif file_type == "video":
+            batch.append(InputMediaVideo(file_id, caption=caption))
 
-            elif file_type == "video":
-                batch.append(InputMediaVideo(file_id, caption=caption))
+        elif file_type == "document":
+            batch.append(InputMediaDocument(file_id, caption=caption))
 
-            elif file_type == "document":
-                batch.append(InputMediaDocument(file_id, caption=caption))
+        elif file_type == "audio":
+            batch.append(InputMediaAudio(file_id, caption=caption))
 
-            elif file_type == "audio":
-                batch.append(InputMediaAudio(file_id, caption=caption))
+        # Telegram album max = 10
+        if len(batch) == 10:
+            flush_batch()
 
-            # Telegram album max = 10 files
-            if len(batch) == 10:
-                flush_batch()
-
-            sent += 1
-
-            # progress every 20 files
-            if sent % 20 == 0:
-                bot.send_message(
-                    call.message.chat.id,
-                    f"📤 Progress: {sent}/{total}"
-                )
-
-            # anti-flood safety
-            time.sleep(0.05)
-
-        except Exception as e:
-            print("Loop error:", e)
-            time.sleep(1)
-
-    # send remaining files
+    # send remaining
     flush_batch()
 
     bot.send_message(call.message.chat.id, "✅ All media sent")
 
     admin_active_jobs.pop(call.from_user.id, None)
-    admin_send_state.pop(call.from_user.id, None)    
+    admin_send_state.pop(call.from_user.id, None)
 # ================= ADMIN STATS ================= #
 
 @bot.message_handler(commands=['stats'])
