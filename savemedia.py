@@ -3,6 +3,8 @@ from telebot.types import InlineKeyboardMarkup, InlineKeyboardButton
 import psycopg2
 from datetime import datetime
 import os
+import threading
+import time
 # ================= CONFIG ================= #
 
 BOT_TOKEN = "8606303101:AAGw3fHdI5jpZOOuFCSoHlPKb1Urj4Oidk4"
@@ -11,7 +13,7 @@ DATABASE_URL = os.getenv("DATABASE_URL")
 ADMIN_ID = 8305774350  # Your Telegram ID
 
 FILES_PER_PAGE = 5
-
+media_groups = {}
 bot = telebot.TeleBot(BOT_TOKEN)
 
 # ================= DATABASE ================= #
@@ -118,10 +120,12 @@ def start(message):
 
 # ================= AUTO SAVE ================= #
 
-@bot.message_handler(content_types=['photo', 'video', 'document', 'audio'])
-def handle_media(message):
-    save_user(message.from_user)
+import threading
+import time
 
+media_groups = {}
+
+def process_single_media(message):
     file_type = message.content_type
     caption = message.caption
 
@@ -138,12 +142,57 @@ def handle_media(message):
 
     save_media(message.from_user.id, file_id, file_type, caption)
 
-    total = get_total_files(message.from_user.id)
 
-    bot.reply_to(
-        message,
-        f"✅ Saved Successfully\n📦 Total Files: {total}"
+def process_album(media_group_id, user_id):
+    time.sleep(1)  # wait for all album parts
+
+    messages = media_groups.pop(media_group_id, [])
+
+    if not messages:
+        return
+
+    for msg in messages:
+        process_single_media(msg)
+
+    total = get_total_files(user_id)
+
+    bot.send_message(
+        user_id,
+        f"✅ Album Saved Successfully\n📦 Total Files: {total}"
     )
+
+
+@bot.message_handler(content_types=['photo', 'video', 'document', 'audio'])
+def handle_media(message):
+    save_user(message.from_user)
+
+    # If album
+    if message.media_group_id:
+        group_id = message.media_group_id
+
+        if group_id not in media_groups:
+            media_groups[group_id] = []
+
+            # Start background thread for album processing
+            threading.Thread(
+                target=process_album,
+                args=(group_id, message.from_user.id)
+            ).start()
+
+        media_groups[group_id].append(message)
+
+    else:
+        # Single media
+        def delayed_save():
+            time.sleep(1)
+            process_single_media(message)
+            total = get_total_files(message.from_user.id)
+            bot.send_message(
+                message.chat.id,
+                f"✅ Saved Successfully\n📦 Total Files: {total}"
+            )
+
+        threading.Thread(target=delayed_save).start()
 
 # ================= CATEGORY MENU ================= #
 
