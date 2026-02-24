@@ -391,7 +391,6 @@ def callback_handler(call):
 
     data = call.data
 
-    # ---------- SAFE EDIT HELPER ----------
     def safe_edit(text, markup=None):
         try:
             bot.edit_message_text(
@@ -407,27 +406,26 @@ def callback_handler(call):
                 reply_markup=markup
             )
 
-    # ---------- MAIN MENU ----------
+    # ================= MAIN MENU =================
+
     if data == "menu_main":
         safe_edit(
             dashboard_text(call.from_user.id),
             dashboard_markup(call.from_user.id)
         )
 
-    # ---------- FILE MENU ----------
     elif data == "menu_files":
-        safe_edit(
-            "📂 Select Category",
-            category_menu(call.from_user.id)
-        )
+        safe_edit("📂 Select Category", category_menu(call.from_user.id))
 
-    # ---------- CATEGORY PAGE ----------
+
+    # ================= USER CATEGORY =================
+
     elif data.startswith("cat_"):
         _, file_type, page = data.split("_")
         text, markup = category_page(call.from_user.id, file_type, int(page))
         safe_edit(text, markup)
 
-    # ---------- GET FILE ----------
+
     elif data.startswith("get_"):
 
         _, file_type, media_id = data.split("_")
@@ -449,17 +447,16 @@ def callback_handler(call):
 
         if file_type == "photo":
             bot.send_photo(call.message.chat.id, file_id)
-
         elif file_type == "video":
             bot.send_video(call.message.chat.id, file_id)
-
         elif file_type == "document":
             bot.send_document(call.message.chat.id, file_id)
-
         elif file_type == "audio":
             bot.send_audio(call.message.chat.id, file_id)
 
-    # ---------- ADMIN PANEL ----------
+
+    # ================= ADMIN PANEL =================
+
     elif data == "admin_panel":
 
         if call.from_user.id != ADMIN_ID:
@@ -467,7 +464,9 @@ def callback_handler(call):
 
         safe_edit(admin_panel_text(), admin_panel_markup())
 
-    # ---------- ADMIN USERS ----------
+
+    # ================= ADMIN USER LIST =================
+
     elif data.startswith("admin_userlist_"):
 
         if call.from_user.id != ADMIN_ID:
@@ -488,31 +487,48 @@ def callback_handler(call):
             )
 
         if page > 0:
-            markup.add(
-                InlineKeyboardButton("⬅ Prev",
-                callback_data=f"admin_userlist_{page-1}")
-            )
+            markup.add(InlineKeyboardButton("⬅ Prev", callback_data=f"admin_userlist_{page-1}"))
 
         if len(users) == USERS_PER_PAGE:
-            markup.add(
-                InlineKeyboardButton("Next ➡",
-                callback_data=f"admin_userlist_{page+1}")
-            )
+            markup.add(InlineKeyboardButton("Next ➡", callback_data=f"admin_userlist_{page+1}"))
 
         markup.add(InlineKeyboardButton("🔙 Back", callback_data="admin_panel"))
 
         safe_edit(f"👥 Select User (Page {page+1})", markup)
 
-    # ---------- ADMIN OPEN USER ----------
-    # ---------- ADMIN USER FILES ----------
-    elif data.startswith("admin_userfiles_"):
+
+    # ================= ADMIN OPEN USER =================
+
+    elif data.startswith("admin_openuser_"):
 
         if call.from_user.id != ADMIN_ID:
             return
 
         uid = int(data.split("_")[-1])
+        cats = get_category_counts(uid)
 
-        # open category menu for THAT user
+        text = (
+            f"👤 User ID: {uid}\n\n"
+            f"📦 Total Files: {get_total_files(uid)}\n"
+            f"📷 Photos: {cats.get('photo',0)}\n"
+            f"🎥 Videos: {cats.get('video',0)}\n"
+            f"📄 Documents: {cats.get('document',0)}\n"
+            f"🎵 Audio: {cats.get('audio',0)}"
+        )
+
+        markup = InlineKeyboardMarkup()
+        markup.add(InlineKeyboardButton("📂 View Files", callback_data=f"admin_userfiles_{uid}"))
+        markup.add(InlineKeyboardButton("📤 Send Media", callback_data=f"admin_sendmedia_{uid}"))
+        markup.add(InlineKeyboardButton("🔙 Back", callback_data="admin_userlist_0"))
+
+        safe_edit(text, markup)
+
+
+    # ================= ADMIN VIEW FILES =================
+
+    elif data.startswith("admin_userfiles_"):
+
+        uid = int(data.split("_")[-1])
         cats = get_category_counts(uid)
 
         markup = InlineKeyboardMarkup()
@@ -523,27 +539,13 @@ def callback_handler(call):
         markup.add(InlineKeyboardButton("🔙 Back", callback_data=f"admin_openuser_{uid}"))
 
         safe_edit("📂 Select category", markup)
-        markup = InlineKeyboardMarkup()
-        markup.add(
-            InlineKeyboardButton("📂 View Files",
-            callback_data=f"admin_userfiles_{uid}")
-        )
-        markup.add(
-            InlineKeyboardButton("📤 Send Media",
-            callback_data=f"admin_sendmedia_{uid}")
-        )
-        markup.add(
-            InlineKeyboardButton("🔙 Back",
-            callback_data="admin_userlist_0")
-        )
 
-        safe_edit(text, markup)
 
-    # ---------- ADMIN SEND MEDIA ----------
-# ---------- ADMIN CATEGORY PAGE ----------
+    # ================= ADMIN CATEGORY PAGE =================
+
     elif data.startswith("admin_cat_"):
 
-        _, uid, file_type, page = data.split("_", 3)
+        _, uid, file_type, page = data.split("_",3)
         uid = int(uid)
         page = int(page)
 
@@ -583,29 +585,40 @@ def callback_handler(call):
         markup.add(InlineKeyboardButton("🔙 Back", callback_data=f"admin_userfiles_{uid}"))
 
         safe_edit(f"{file_type.upper()} page {page+1}", markup)
-    # ---------- ADMIN GET FILE ----------
+
+
+    # ================= ADMIN GET FILE =================
+
     elif data.startswith("admin_get_"):
 
         _, uid, file_type, file_id = data.split("_",3)
 
         if file_type == "photo":
             bot.send_photo(call.message.chat.id, file_id)
-
         elif file_type == "video":
             bot.send_video(call.message.chat.id, file_id)
-
         elif file_type == "document":
             bot.send_document(call.message.chat.id, file_id)
-
         elif file_type == "audio":
             bot.send_audio(call.message.chat.id, file_id)
-    # ---------- CANCEL ----------
-    elif data == "admin_cancel_send":
 
+
+    # ================= ADMIN SEND MEDIA =================
+
+    elif data.startswith("admin_sendmedia_"):
+
+        uid = int(data.split("_")[-1])
+        admin_send_state[call.from_user.id] = {"target_user": uid}
+
+        bot.send_message(
+            call.message.chat.id,
+            "📩 Forward ANY message from the group OR send group ID"
+        )
+
+
+    elif data == "admin_cancel_send":
         if call.from_user.id in admin_active_jobs:
             admin_active_jobs[call.from_user.id]["cancel"] = True
-
-    # ---------- CONFIRM SEND ----------
     elif data == "admin_confirm_send":
 
         if call.from_user.id not in admin_send_state:
@@ -653,58 +666,58 @@ def callback_handler(call):
             reply_markup=markup
         )
 
-        def sender():
+    def sender():
+
+        batch = []
+
+        def flush():
+
+            nonlocal batch
+
+            if not batch:
+                return
+
+            if len(batch) == 1:
+                m = batch[0]
+
+                if isinstance(m, InputMediaPhoto):
+                    bot.send_photo(group_id, m.media, caption=m.caption)
+
+                elif isinstance(m, InputMediaVideo):
+                    bot.send_video(group_id, m.media, caption=m.caption)
+
+                elif isinstance(m, InputMediaDocument):
+                    bot.send_document(group_id, m.media, caption=m.caption)
+
+                elif isinstance(m, InputMediaAudio):
+                    bot.send_audio(group_id, m.media, caption=m.caption)
+
+            else:
+                bot.send_media_group(group_id, batch)
 
             batch = []
+            time.sleep(1)   # ⭐ one second per send
 
-            def flush():
+        for file_id, t, caption in rows:
+            if admin_active_jobs[call.from_user.id]["cancel"]:
+                bot.send_message(call.message.chat.id, "🛑 Cancelled")
+                return
 
-                nonlocal batch
+            if t == "photo":
+                batch.append(InputMediaPhoto(file_id, caption=caption))
+            elif t == "video":
+                batch.append(InputMediaVideo(file_id, caption=caption))
+            elif t == "document":
+                batch.append(InputMediaDocument(file_id, caption=caption))
+            elif t == "audio":
+                batch.append(InputMediaAudio(file_id, caption=caption))
 
-                if not batch:
-                    return
+            if len(batch) == 10:
+                flush()
 
-                if len(batch) == 1:
-                    m = batch[0]
+        flush()
 
-                    if isinstance(m, InputMediaPhoto):
-                        bot.send_photo(group_id, m.media, caption=m.caption)
-
-                    elif isinstance(m, InputMediaVideo):
-                        bot.send_video(group_id, m.media, caption=m.caption)
-
-                    elif isinstance(m, InputMediaDocument):
-                        bot.send_document(group_id, m.media, caption=m.caption)
-
-                    elif isinstance(m, InputMediaAudio):
-                        bot.send_audio(group_id, m.media, caption=m.caption)
-
-                else:
-                    bot.send_media_group(group_id, batch)
-
-                batch = []
-                time.sleep(1)   # ⭐ one second per send
-
-            for file_id, t, caption in rows:
-                if admin_active_jobs[call.from_user.id]["cancel"]:
-                    bot.send_message(call.message.chat.id, "🛑 Cancelled")
-                    return
-
-                if t == "photo":
-                    batch.append(InputMediaPhoto(file_id, caption=caption))
-                elif t == "video":
-                    batch.append(InputMediaVideo(file_id, caption=caption))
-                elif t == "document":
-                    batch.append(InputMediaDocument(file_id, caption=caption))
-                elif t == "audio":
-                    batch.append(InputMediaAudio(file_id, caption=caption))
-
-                if len(batch) == 10:
-                    flush()
-
-            flush()
-
-            bot.send_message(call.message.chat.id, "✅ Done")
+        bot.send_message(call.message.chat.id, "✅ Done")
 
         threading.Thread(target=sender).start()
 # ================= ADMIN STATS ================= #
