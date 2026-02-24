@@ -130,7 +130,7 @@ def get_category_counts(user_id):
 def dashboard_text(user_id):
     total_files = get_total_files(user_id)
     total_size = format_size(get_storage_used(user_id))
-    return f"📦 Cloud Vault\n\n📊 Your Storage:\n• Total Files: {total}\n\nChoose an option:"
+    return f"📦 Cloud Vault\n\n📊 Your Storage:\n• Total Files: {total_files}\n\nChoose an option:"
 
 def dashboard_markup():
     markup = InlineKeyboardMarkup()
