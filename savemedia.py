@@ -487,6 +487,49 @@ def callback_handler(call):
         page = int(data.split("_")[-1])
         users = get_users_page(page)
 
+        markup = InlineKeyboardMarkup()
+
+        # create ONE BUTTON per user
+        for user_id, username in users:
+
+            if username:
+                text = f"@{username}"
+            else:
+                text = f"User {user_id}"
+
+            # button opens that user
+            markup.add(
+                InlineKeyboardButton(
+                    text,
+                    callback_data=f"admin_openuser_{user_id}"
+                )
+            )
+
+        # pagination
+        if page > 0:
+            markup.add(
+                InlineKeyboardButton("⬅ Prev", callback_data=f"admin_userlist_{page-1}")
+            )
+
+        if len(users) == USERS_PER_PAGE:
+            markup.add(
+                InlineKeyboardButton("Next ➡", callback_data=f"admin_userlist_{page+1}")
+            )
+
+        markup.add(
+            InlineKeyboardButton("🔙 Back", callback_data="admin_panel")
+        )
+
+        bot.edit_message_text(
+            f"👥 Select a user (Page {page+1})",
+            call.message.chat.id,
+            call.message.message_id,
+            reply_markup=markup
+        )
+
+        page = int(data.split("_")[-1])
+        users = get_users_page(page)
+
         text = f"👥 Registered Users (Page {page + 1})\n\n"
 
         for idx, (user_id, username) in enumerate(users, start=1 + page * USERS_PER_PAGE):
@@ -508,6 +551,37 @@ def callback_handler(call):
             )
 
         markup.add(InlineKeyboardButton("🔙 Back", callback_data="admin_panel"))
+
+        bot.edit_message_text(
+            text,
+            call.message.chat.id,
+            call.message.message_id,
+            reply_markup=markup
+        )
+    elif data.startswith("admin_openuser_"):
+        if call.from_user.id != ADMIN_ID:
+            return
+
+        user_id = int(data.split("_")[-1])
+
+        total = get_total_files(user_id)
+        size = format_size(get_storage_used(user_id))
+        counts = get_category_counts(user_id)
+
+        text = (
+            f"👤 USER ID: {user_id}\n\n"
+            f"📦 Files: {total}\n"
+            f"💾 Storage: {size}\n\n"
+            f"📷 Photos: {counts.get('photo',0)}\n"
+            f"🎥 Videos: {counts.get('video',0)}\n"
+            f"📄 Documents: {counts.get('document',0)}\n"
+            f"🎵 Audio: {counts.get('audio',0)}"
+        )
+
+        markup = InlineKeyboardMarkup()
+        markup.add(
+            InlineKeyboardButton("🔙 Back to users", callback_data="admin_userlist_0")
+        )
 
         bot.edit_message_text(
             text,
