@@ -192,7 +192,7 @@ def finalize_user_upload(user_id, chat_id):
             f"✅ Saved: {session['saved']}\n"
             f"♻️ Skipped (Duplicates): {session['duplicate']}\n\n"
             f"📦 Total Files: {total_files}\n"
-            f"💾 Total Size: {total_size}"
+            f"💾 Total Size: {total_size},"
         )
     else:
         text = (
