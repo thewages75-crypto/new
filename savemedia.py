@@ -321,6 +321,34 @@ def receive_group(message):
             bot.send_media_group(group_id,batch)
 
     bot.send_message(message.chat.id,"✅ Media sent")
+# ================= ADMIN_STATS_ENGINE =================
+
+def get_total_users():
+
+    conn=get_connection()
+    cur=conn.cursor()
+
+    cur.execute("SELECT COUNT(*) FROM users")
+    total=cur.fetchone()[0]
+
+    cur.close()
+    conn.close()
+
+    return total
+
+
+def get_total_files_all():
+
+    conn=get_connection()
+    cur=conn.cursor()
+
+    cur.execute("SELECT COUNT(*) FROM stored_media")
+    total=cur.fetchone()[0]
+
+    cur.close()
+    conn.close()
+
+    return total
 @bot.callback_query_handler(func=lambda call:True)
 def callbacks(call):
 
@@ -340,13 +368,23 @@ def callbacks(call):
         if call.from_user.id!=ADMIN_ID:
             return
 
+        users=get_total_users()
+        files=get_total_files_all()
+
+        text=(
+            "🛠 Admin Panel\n\n"
+            f"👥 Total Users: {users}\n"
+            f"📦 Total Files: {files}\n\n"
+            "Choose option:"
+        )
+
         markup=InlineKeyboardMarkup()
 
         markup.add(InlineKeyboardButton("👥 View Users",callback_data="admin_users"))
         markup.add(InlineKeyboardButton("🔙 Back",callback_data="menu_main"))
 
         bot.edit_message_text(
-            "🛠 Admin Panel",
+            text,
             call.message.chat.id,
             call.message.message_id,
             reply_markup=markup
