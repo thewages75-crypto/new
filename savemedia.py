@@ -42,6 +42,7 @@ def init_db():
             file_id TEXT NOT NULL,
             file_type TEXT NOT NULL,
             caption TEXT,
+            media_group_id TEXT,
             saved_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
             UNIQUE(user_id, file_id),
             file_size BIGINT DEFAULT 0
@@ -126,25 +127,24 @@ def save_user(user):
     cur.close()
     conn.close()
 
-def save_media(user_id, file_id, file_type, caption,file_size):
+def save_media(user_id, file_id, file_type, caption, file_size, media_group_id=None):
     conn = get_connection()
     cur = conn.cursor()
 
     cur.execute("""
-        INSERT INTO stored_media (user_id, file_id, file_type, caption, file_size)
-        VALUES (%s, %s, %s, %s, %s)
+        INSERT INTO stored_media
+        (user_id, file_id, file_type, caption, file_size, media_group_id)
+        VALUES (%s,%s,%s,%s,%s,%s)
         ON CONFLICT (user_id, file_id) DO NOTHING
         RETURNING id;
-    """, (user_id, file_id, file_type, caption, file_size))
+    """, (user_id, file_id, file_type, caption, file_size, media_group_id))
 
     result = cur.fetchone()
-
     conn.commit()
     cur.close()
     conn.close()
 
     return result is not None
-
 def get_total_files(user_id):
     conn = get_connection()
     cur = conn.cursor()
@@ -268,65 +268,75 @@ def finalize_user_upload(user_id, chat_id):
         message_id
     )
 
-@bot.message_handler(content_types=['photo', 'video', 'document', 'audio'])
+album_buffer = {}
+album_timers = {}
+
+@bot.message_handler(content_types=['photo','video','document','audio'])
 def handle_media(message):
+
     save_user(message.from_user)
 
-    file_type = message.content_type
-    caption = message.caption
+    media_group_id = message.media_group_id
 
-    if file_type == "photo":
+    # ---------- detect file ----------
+    if message.content_type == "photo":
         file_id = message.photo[-1].file_id
         file_size = message.photo[-1].file_size
-    elif file_type == "video":
+        file_type = "photo"
+
+    elif message.content_type == "video":
         file_id = message.video.file_id
         file_size = message.video.file_size
-    elif file_type == "document":
+        file_type = "video"
+
+    elif message.content_type == "document":
         file_id = message.document.file_id
         file_size = message.document.file_size
-    elif file_type == "audio":
+        file_type = "document"
+
+    elif message.content_type == "audio":
         file_id = message.audio.file_id
         file_size = message.audio.file_size
+        file_type = "audio"
+
     else:
         return
 
-    result = save_media(message.from_user.id, file_id, file_type, caption, file_size)
-
+    caption = message.caption
     user_id = message.from_user.id
-    chat_id = message.chat.id
 
-    with session_lock:
-        if user_id not in user_sessions:
-            processing_msg = bot.send_message(chat_id, "⏳ Processing uploads...")
+    # =========================
+    # ALBUM DETECTED
+    # =========================
+    if media_group_id:
 
-            user_sessions[user_id] = {
-                "total": 0,
-                "saved": 0,
-                "duplicate": 0,
-                "message_id": processing_msg.message_id
-            }
+        if media_group_id not in album_buffer:
+            album_buffer[media_group_id] = []
 
-    session = user_sessions[user_id]
+        album_buffer[media_group_id].append(
+            (user_id, file_id, file_type, caption, file_size, media_group_id)
+        )
 
+        # cancel old timer
+        if media_group_id in album_timers:
+            album_timers[media_group_id].cancel()
 
-    session["total"] += 1
-    if result:
-        session["saved"] += 1
+        # wait for album complete
+        def finalize_album():
+
+            items = album_buffer.pop(media_group_id, [])
+
+            for data in items:
+                save_media(*data)
+
+        t = threading.Timer(1.2, finalize_album)
+        album_timers[media_group_id] = t
+        t.start()
+
     else:
-        session["duplicate"] += 1
-
-    if user_id in user_timers:
-        user_timers[user_id].cancel()
-
-    timer = threading.Timer(
-        1.0,
-        finalize_user_upload,
-        args=(user_id, chat_id)
-    )
-
-    user_timers[user_id] = timer
-    timer.start()
-
+        # single media
+        save_media(user_id, file_id, file_type, caption, file_size, None)
+        
 # ================= CATEGORY MENU ================= #
 
 def category_menu(user_id):
@@ -454,8 +464,7 @@ def callback_handler(call):
         cur.close()
         conn.close()
         bot.edit_message_text(
-            f"📦 Total Files: {total_files}\n"
-            f"💾 Total Storage Used: {format_size(get_total_storage())}",
+            f"📦 Total Files: {total_files}",
             call.message.chat.id,
             call.message.message_id,
             reply_markup=admin_panel_markup()
@@ -650,7 +659,6 @@ def callback_handler(call):
 
                 try:
 
-                    # SEND EXACT TYPE LIKE USER
                     if file_type == "photo":
                         bot.send_photo(group_id, file_id, caption=caption)
 
@@ -665,19 +673,19 @@ def callback_handler(call):
 
                     sent += 1
 
-                    # progress every 10
+                    # progress update every 10 files
                     if sent % 10 == 0:
                         bot.send_message(
                             call.message.chat.id,
                             f"📤 Progress: {sent}/{total}"
                         )
 
-                    # ✅ YOUR REQUESTED 1 SECOND DELAY
-                    time.sleep(1)
+                    # anti flood delay
+                    time.sleep(0.05)
 
                 except Exception as e:
                     print("Send error:", e)
-                    time.sleep(2)
+                    time.sleep(1)
 
             bot.send_message(call.message.chat.id, "✅ All media sent")
 
