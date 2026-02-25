@@ -10,7 +10,7 @@ BOT_TOKEN = "8606303101:AAGw3fHdI5jpZOOuFCSoHlPKb1Urj4Oidk4"
 DATABASE_URL = os.getenv("DATABASE_URL")
 admin_jobs = {}
 bot = telebot.TeleBot(BOT_TOKEN)
-
+admin_send_state = {}
 def get_connection():
     return psycopg2.connect(DATABASE_URL)
 
@@ -266,7 +266,7 @@ def start(msg):
     )
 # ================= ADMIN_PROGRESS_SENDER =================
 
-@bot.message_handler(func=lambda m:m.from_user.id in admin_send_state)
+@bot.message_handler(func=lambda m: m.from_user and m.from_user.id in admin_send_state)
 def receive_group(message):
 
     group_id=int(message.text)
@@ -366,7 +366,7 @@ def receive_group(message):
                     progress_id
                 )
             except:
-                pass
+                passa
 
         time.sleep(0.05)   # anti-flood safety
 
