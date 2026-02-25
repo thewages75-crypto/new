@@ -454,7 +454,8 @@ def callback_handler(call):
         cur.close()
         conn.close()
         bot.edit_message_text(
-            f"📦 Total Files: {total_files}",
+            f"📦 Total Files: {total_files}\n"
+            f"💾 Total Storage Used: {format_size(get_total_storage())}",
             call.message.chat.id,
             call.message.message_id,
             reply_markup=admin_panel_markup()
