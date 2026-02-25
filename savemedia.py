@@ -1,5 +1,7 @@
 # ================= CORE_BOOT =================
 
+from time import time
+
 import telebot
 import psycopg2
 import os
@@ -372,8 +374,9 @@ def receive_group(message):
         f"✅ Done!\nSent {total} files",
         message.chat.id,
         progress_id
-    admin_jobs.pop(message.from_user.id,None)
     )
+    admin_jobs.pop(message.from_user.id,None)
+    
 # ================= ADMIN_STATS_ENGINE =================
 
 def get_total_users():
