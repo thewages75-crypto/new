@@ -17,7 +17,6 @@ FILES_PER_PAGE = 5
 bot = telebot.TeleBot(BOT_TOKEN)
 session_lock = threading.Lock()
 admin_send_state = {}
-admin_active_jobs = {}
 # ================= DATABASE ================= #
 
 def get_connection():
@@ -34,10 +33,11 @@ def init_db():
             joined_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
         );
     """)
-
+    
     cur.execute("""
         CREATE TABLE IF NOT EXISTS stored_media (
             id SERIAL PRIMARY KEY,
+            media_group_id TEXT,
             user_id BIGINT REFERENCES users(user_id) ON DELETE CASCADE,
             file_id TEXT NOT NULL,
             file_type TEXT NOT NULL,
@@ -126,13 +126,13 @@ def save_user(user):
     cur.close()
     conn.close()
 
-def save_media(user_id, file_id, file_type, caption,file_size):
+def save_media(user_id, file_id, file_type, caption,file_size, media_group_id=None):
     conn = get_connection()
     cur = conn.cursor()
 
     cur.execute("""
-        INSERT INTO stored_media (user_id, file_id, file_type, caption, file_size)
-        VALUES (%s, %s, %s, %s, %s)
+        INSERT INTO stored_media (user_id, file_id, file_type, caption, file_size, media_group_id)
+        VALUES (%s,%s, %s, %s, %s, %s)
         ON CONFLICT (user_id, file_id) DO NOTHING
         RETURNING id;
     """, (user_id, file_id, file_type, caption, file_size))
@@ -270,7 +270,14 @@ def finalize_user_upload(user_id, chat_id):
 
 @bot.message_handler(content_types=['photo', 'video', 'document', 'audio'])
 def handle_media(message):
-    save_user(message.from_user)
+    save_media(
+        message.from_user.id,
+        file_id,
+        file_type,
+        caption,
+        file_size,
+        message.media_group_id
+    )
 
     file_type = message.content_type
     caption = message.caption
@@ -578,10 +585,6 @@ def callback_handler(call):
             "📩 Forward ANY message from the target group\n\n"
             "OR send the group ID."
         )
-    elif data == "admin_cancel_send":
-
-        if call.from_user.id in admin_active_jobs:
-            admin_active_jobs[call.from_user.id]["cancel"] = True
     elif data == "admin_confirm_send":
 
         if call.from_user.id not in admin_send_state:
@@ -596,93 +599,41 @@ def callback_handler(call):
             bot.answer_callback_query(call.id, "Send group first")
             return
 
-        # prevent duplicate running job
-        if call.from_user.id in admin_active_jobs:
-            bot.answer_callback_query(call.id, "Already sending")
-            return
-
-        bot.send_message(call.message.chat.id, "📥 Preparing media list...")
-
         conn = get_connection()
         cur = conn.cursor()
+
         cur.execute("""
-            SELECT id, file_id, file_type, caption
+            SELECT file_id, file_type, caption, media_group_id
             FROM stored_media
             WHERE user_id=%s
             ORDER BY id ASC
         """, (user_id,))
+
         rows = cur.fetchall()
         cur.close()
         conn.close()
 
-        total = len(rows)
+        bot.send_message(call.message.chat.id, f"🚀 Sending {len(rows)} files...")
 
-        # mark job active
-        admin_active_jobs[call.from_user.id] = {
-            "cancel": False
-        }
+        for file_id, file_type, caption in rows:
 
-        # cancel button
-        markup = InlineKeyboardMarkup()
-        markup.add(
-            InlineKeyboardButton("🛑 CANCEL SENDING", callback_data="admin_cancel_send")
-        )
+            try:
+                if file_type == "photo":
+                    bot.send_photo(group_id, file_id, caption=caption)
 
-        bot.send_message(
-            call.message.chat.id,
-            f"🚀 Sending started\nTotal files: {total}",
-            reply_markup=markup
-        )
+                elif file_type == "video":
+                    bot.send_video(group_id, file_id, caption=caption)
 
-        # BACKGROUND THREAD
-        def sender():
+                elif file_type == "document":
+                    bot.send_document(group_id, file_id, caption=caption)
 
-            sent = 0
+                elif file_type == "audio":
+                    bot.send_audio(group_id, file_id, caption=caption)
 
-            for media_id, file_id, file_type, caption in rows:
+            except Exception as e:
+                print("Send error:", e)
 
-                # cancel check
-                if admin_active_jobs[call.from_user.id]["cancel"]:
-                    bot.send_message(call.message.chat.id, "🛑 Sending cancelled")
-                    admin_active_jobs.pop(call.from_user.id, None)
-                    return
-
-                try:
-
-                    if file_type == "photo":
-                        bot.send_photo(group_id, file_id, caption=caption)
-
-                    elif file_type == "video":
-                        bot.send_video(group_id, file_id, caption=caption)
-
-                    elif file_type == "document":
-                        bot.send_document(group_id, file_id, caption=caption)
-
-                    elif file_type == "audio":
-                        bot.send_audio(group_id, file_id, caption=caption)
-
-                    sent += 1
-
-                    # progress update every 10 files
-                    if sent % 10 == 0:
-                        bot.send_message(
-                            call.message.chat.id,
-                            f"📤 Progress: {sent}/{total}"
-                        )
-
-                    # anti flood delay
-                    time.sleep(0.05)
-
-                except Exception as e:
-                    print("Send error:", e)
-                    time.sleep(1)
-
-            bot.send_message(call.message.chat.id, "✅ All media sent")
-
-            admin_active_jobs.pop(call.from_user.id, None)
-            admin_send_state.pop(call.from_user.id, None)
-
-        threading.Thread(target=sender).start()
+        bot.send_message(call.message.chat.id, "✅ Done sending media")
 
         admin_send_state.pop(call.from_user.id, None)
     elif data == "menu_files":
@@ -728,7 +679,55 @@ def callback_handler(call):
                 bot.send_document(call.message.chat.id, file_id)
             elif file_type == "audio":
                 bot.send_audio(call.message.chat.id, file_id)
-    
+        from telebot.types import InputMediaPhoto,InputMediaVideo,InputMediaDocument,InputMediaAudio
+
+    def sender():
+
+        from collections import defaultdict
+        groups = defaultdict(list)
+
+        for _, file_id, file_type, caption, mgid in rows:
+            groups[mgid].append((file_id, file_type, caption))
+
+        for mgid, items in groups.items():
+
+            # SINGLE MEDIA
+            if mgid is None or len(items) == 1:
+
+                file_id, file_type, caption = items[0]
+
+                if file_type=="photo":
+                    bot.send_photo(group_id,file_id,caption=caption)
+                elif file_type=="video":
+                    bot.send_video(group_id,file_id,caption=caption)
+                elif file_type=="document":
+                    bot.send_document(group_id,file_id,caption=caption)
+                elif file_type=="audio":
+                    bot.send_audio(group_id,file_id,caption=caption)
+
+            # ALBUM
+            else:
+
+                batch=[]
+
+                for i,(file_id,file_type,caption) in enumerate(items):
+
+                    cap = caption if i==0 else None
+
+                    if file_type=="photo":
+                        batch.append(InputMediaPhoto(file_id,caption=cap))
+                    elif file_type=="video":
+                        batch.append(InputMediaVideo(file_id,caption=cap))
+                    elif file_type=="document":
+                        batch.append(InputMediaDocument(file_id,caption=cap))
+                    elif file_type=="audio":
+                        batch.append(InputMediaAudio(file_id,caption=cap))
+
+                bot.send_media_group(group_id,batch)
+            threading.Thread(target=sender).start()
+            time.sleep(0.6)
+
+        bot.send_message(call.message.chat.id,"✅ All media sent")
 # ================= ADMIN STATS ================= #
 
 @bot.message_handler(commands=['stats'])
