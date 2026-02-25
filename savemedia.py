@@ -268,37 +268,54 @@ def finalize_user_upload(user_id, chat_id):
         message_id
     )
 
-@bot.message_handler(content_types=['photo', 'video', 'document', 'audio'])
-def handle_media(message):
-    save_media(
+@bot.message_handler(content_types=['photo','video','document','audio'])
+def handle_media_new(message):
+
+    save_user(message.from_user)
+
+    caption = message.caption
+    media_group_id = message.media_group_id
+
+    file_id = None
+    file_size = 0
+    file_type = None
+
+    # --- SAFE MEDIA DETECTION ---
+    if message.photo:
+        file_type = "photo"
+        file_id = message.photo[-1].file_id
+        file_size = message.photo[-1].file_size
+
+    elif message.video:
+        file_type = "video"
+        file_id = message.video.file_id
+        file_size = message.video.file_size
+
+    elif message.document:
+        file_type = "document"
+        file_id = message.document.file_id
+        file_size = message.document.file_size
+
+    elif message.audio:
+        file_type = "audio"
+        file_id = message.audio.file_id
+        file_size = message.audio.file_size
+
+    # nothing valid → ignore
+    if not file_id:
+        return
+
+    # --- SAVE WITH ALBUM ID ---
+    result = save_media(
         message.from_user.id,
         file_id,
         file_type,
         caption,
         file_size,
-        message.media_group_id
+        media_group_id
     )
 
-    file_type = message.content_type
-    caption = message.caption
-
-    if file_type == "photo":
-        file_id = message.photo[-1].file_id
-        file_size = message.photo[-1].file_size
-    elif file_type == "video":
-        file_id = message.video.file_id
-        file_size = message.video.file_size
-    elif file_type == "document":
-        file_id = message.document.file_id
-        file_size = message.document.file_size
-    elif file_type == "audio":
-        file_id = message.audio.file_id
-        file_size = message.audio.file_size
-    else:
-        return
-
-    result = save_media(message.from_user.id, file_id, file_type, caption, file_size)
-
+    # --- SESSION COUNTER (same logic as your bot) ---
     user_id = message.from_user.id
     chat_id = message.chat.id
 
@@ -315,80 +332,24 @@ def handle_media(message):
 
     session = user_sessions[user_id]
 
-
     session["total"] += 1
     if result:
         session["saved"] += 1
     else:
         session["duplicate"] += 1
 
+    # restart timer (album-safe batching)
     if user_id in user_timers:
         user_timers[user_id].cancel()
 
     timer = threading.Timer(
-        1.0,
+        1.2,
         finalize_user_upload,
         args=(user_id, chat_id)
     )
 
     user_timers[user_id] = timer
     timer.start()
-
-# ================= CATEGORY MENU ================= #
-
-def category_menu(user_id):
-    counts = get_category_counts(user_id)
-
-    markup = InlineKeyboardMarkup()
-    markup.add(InlineKeyboardButton(f"📷 Photos ({counts.get('photo',0)})", callback_data="cat_photo_0"))
-    markup.add(InlineKeyboardButton(f"🎥 Videos ({counts.get('video',0)})", callback_data="cat_video_0"))
-    markup.add(InlineKeyboardButton(f"📄 Documents ({counts.get('document',0)})", callback_data="cat_document_0"))
-    markup.add(InlineKeyboardButton(f"🎵 Audio ({counts.get('audio',0)})", callback_data="cat_audio_0"))
-    markup.add(InlineKeyboardButton("🔙 Back", callback_data="menu_main"))
-    return markup
-
-# ================= CATEGORY PAGE ================= #
-
-def category_page(user_id, file_type, page):
-    conn = get_connection()
-    cur = conn.cursor()
-
-    offset = page * FILES_PER_PAGE
-
-    cur.execute("""
-        SELECT id, file_id, saved_at
-        FROM stored_media
-        WHERE user_id = %s AND file_type = %s
-        ORDER BY id DESC
-        LIMIT %s OFFSET %s
-    """, (user_id, file_type, FILES_PER_PAGE, offset))
-
-    rows = cur.fetchall()
-    cur.close()
-    conn.close()
-
-    markup = InlineKeyboardMarkup()
-
-    for media_id, file_id, saved_at in rows:
-        date_str = saved_at.strftime("%d %b %H:%M")
-        markup.add(
-            InlineKeyboardButton(
-                f"{date_str}",
-                callback_data=f"get_{file_type}_{media_id}"
-            )
-        )
-
-    if page > 0:
-        markup.add(InlineKeyboardButton("⬅ Prev", callback_data=f"cat_{file_type}_{page-1}"))
-
-    if len(rows) == FILES_PER_PAGE:
-        markup.add(InlineKeyboardButton("Next ➡", callback_data=f"cat_{file_type}_{page+1}"))
-
-    markup.add(InlineKeyboardButton("🔙 Back", callback_data="menu_files"))
-
-    text = f"{file_type.upper()}\nPage: {page+1}"
-    return text, markup
-
 # ================= CALLBACKS ================= #
 
 @bot.callback_query_handler(func=lambda call: True)
