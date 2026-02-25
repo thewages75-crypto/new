@@ -6,7 +6,7 @@ import os
 ADMIN_ID = 8305774350   # ← PUT YOUR TELEGRAM ID
 BOT_TOKEN = "8606303101:AAGw3fHdI5jpZOOuFCSoHlPKb1Urj4Oidk4"
 DATABASE_URL = os.getenv("DATABASE_URL")
-
+admin_jobs = {}
 bot = telebot.TeleBot(BOT_TOKEN)
 
 def get_connection():
@@ -262,6 +262,8 @@ def start(msg):
         f"📦 Cloud Vault\n\nStored files: {total}",
         reply_markup=dashboard_markup(msg.from_user.id)
     )
+# ================= ADMIN_PROGRESS_SENDER =================
+
 @bot.message_handler(func=lambda m:m.from_user.id in admin_send_state)
 def receive_group(message):
 
@@ -283,7 +285,22 @@ def receive_group(message):
     cur.close()
     conn.close()
 
-    # -------- rebuild albums --------
+    total=len(rows)
+
+    from telebot.types import InlineKeyboardMarkup,InlineKeyboardButton
+
+    markup=InlineKeyboardMarkup()
+    markup.add(InlineKeyboardButton("🛑 CANCEL",callback_data="cancel_send"))
+
+    progress=bot.send_message(
+        message.chat.id,
+        f"🚀 Sending media...\n0/{total}",
+        reply_markup=markup
+    )
+
+    progress_id=progress.message_id
+    admin_jobs[message.from_user.id]={"cancel":False}
+    # ---- rebuild albums ----
     from collections import defaultdict
     from telebot.types import InputMediaPhoto,InputMediaVideo,InputMediaDocument,InputMediaAudio
 
@@ -292,9 +309,20 @@ def receive_group(message):
     for file_id,file_type,caption,mgid in rows:
         groups[mgid].append((file_id,file_type,caption))
 
+    sent=0
+    if admin_jobs.get(message.from_user.id,{}).get("cancel"):
+
+        bot.edit_message_text(
+            "🛑 Sending cancelled",
+            message.chat.id,
+            progress_id
+        )
+
+        admin_jobs.pop(message.from_user.id,None)
+        return
     for mgid,items in groups.items():
 
-        # single media
+        # SINGLE
         if mgid is None or len(items)==1:
 
             f,t,c=items[0]
@@ -304,7 +332,9 @@ def receive_group(message):
             elif t=="document": bot.send_document(group_id,f,caption=c)
             elif t=="audio": bot.send_audio(group_id,f,caption=c)
 
-        # album restore
+            sent+=1
+
+        # ALBUM
         else:
 
             batch=[]
@@ -320,7 +350,30 @@ def receive_group(message):
 
             bot.send_media_group(group_id,batch)
 
-    bot.send_message(message.chat.id,"✅ Media sent")
+            sent+=len(items)
+
+        # ---- UPDATE PROGRESS EVERY 5 FILES ----
+        if sent%5==0 or sent==total:
+
+            percent=int(sent*100/total)
+
+            try:
+                bot.edit_message_text(
+                    f"🚀 Sending media...\n{sent}/{total}\n{percent}%",
+                    message.chat.id,
+                    progress_id
+                )
+            except:
+                pass
+
+        time.sleep(0.05)   # anti-flood safety
+
+    bot.edit_message_text(
+        f"✅ Done!\nSent {total} files",
+        message.chat.id,
+        progress_id
+    admin_jobs.pop(message.from_user.id,None)
+    )
 # ================= ADMIN_STATS_ENGINE =================
 
 def get_total_users():
@@ -445,6 +498,12 @@ def callbacks(call):
         bot.send_message(call.message.chat.id,"Send target GROUP ID")
 
         admin_send_state[call.from_user.id]=uid
+    elif call.data=="cancel_send":
+
+        if call.from_user.id in admin_jobs:
+            admin_jobs[call.from_user.id]["cancel"]=True
+
+        bot.answer_callback_query(call.id,"Stopping...")
     elif call.data.startswith("cat_"):
 
         file_type = call.data.split("_")[1]
