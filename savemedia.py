@@ -3,8 +3,8 @@
 import telebot
 import psycopg2
 import os
-ADMIN_ID = 123456789   # ← PUT YOUR TELEGRAM ID
-BOT_TOKEN = "PUT_YOUR_TOKEN_HERE"
+ADMIN_ID = 8305774350   # ← PUT YOUR TELEGRAM ID
+BOT_TOKEN = "8606303101:AAGw3fHdI5jpZOOuFCSoHlPKb1Urj4Oidk4"
 DATABASE_URL = os.getenv("DATABASE_URL")
 
 bot = telebot.TeleBot(BOT_TOKEN)
