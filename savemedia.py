@@ -423,10 +423,12 @@ def handle_media(message):
                 result = save_media(u_id, file_id, file_type, caption, file_size, mgid)
 
                 if result:
-                    saved_count += 1
+                    # saved_count += 1
+                    user_sessions[user_id]["saved"] += 1
                     user_sessions[user_id][file_type] += 1
                 else:
-                    duplicate_count += 1
+                    # duplicate_count += 1
+                    user_sessions[user_id]["duplicate"] += 1
 
             with session_lock:
                 if user_id not in user_sessions:
@@ -468,14 +470,17 @@ def handle_media(message):
 
         with session_lock:
             if user_id not in user_sessions:
-                msg = bot.send_message(message.chat.id, "📥 Saving files...")
+                msg = bot.send_message(chat_id, "📥 Saving files...")
                 user_sessions[user_id] = {
                     "total": 0,
                     "saved": 0,
                     "duplicate": 0,
+                    "photo": 0,
+                    "video": 0,
+                    "document": 0,
+                    "audio": 0,
                     "message_id": msg.message_id
                 }
-
             user_sessions[user_id]["total"] += 1
 
             if is_saved:
