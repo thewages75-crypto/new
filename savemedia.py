@@ -1324,7 +1324,6 @@ def queue_worker():
                         # Check if album might continue in next batch
                         if i == len(rows):
 
-                            # Look ahead in DB
                             conn = get_connection()
                             cur = conn.cursor()
                             cur.execute("""
@@ -1340,17 +1339,21 @@ def queue_worker():
                             conn.close()
 
                             if next_row and next_row[0] == mgid:
-                                # Album continues in next batch
+                                # Album continues
                                 pending_album = album_items
                                 pending_mgid = mgid
                                 pending_last_id = album_last_id
                                 break
                             else:
-                                # Album actually finished here
+                                # Album finished
                                 bot.send_media_group(current_group, album_items)
                                 sent += len(album_items)
                                 last_sent_id = album_last_id
-
+                        else:
+                            # Normal case (not end of batch)
+                            bot.send_media_group(current_group, album_items)
+                            sent += len(album_items)
+                            last_sent_id = album_last_id
                         # Otherwise send immediately
                         bot.send_media_group(current_group, album_items)
                         sent += len(album_items)
