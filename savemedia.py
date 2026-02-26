@@ -827,13 +827,24 @@ def callback_handler(call):
         group_id = int(data.split("_")[-1])
 
         if call.from_user.id not in admin_send_state:
+            bot.answer_callback_query(call.id, "Session expired")
             return
 
         admin_send_state[call.from_user.id]["group_id"] = group_id
 
+        markup = InlineKeyboardMarkup()
+        markup.add(
+            InlineKeyboardButton(
+                "🚀 SEND ALL MEDIA NOW",
+                callback_data="admin_confirm_send"
+            )
+        )
+
         bot.send_message(
             call.message.chat.id,
-            f"✅ Selected group: {group_id}\n\nPress confirm to start."
+            f"✅ Group selected: `{group_id}`\n\nPress the button below to start sending.",
+            parse_mode="Markdown",
+            reply_markup=markup
         )
 
 
