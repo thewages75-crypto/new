@@ -1350,25 +1350,34 @@ def queue_worker():
                         # Check if album might continue in next batch
                         if i == len(rows):
 
-                            # check if continues
+                            # Look ahead safely
+                            conn = get_connection()
+                            cur = conn.cursor()
+                            cur.execute("""
+                                SELECT media_group_id
+                                FROM stored_media
+                                WHERE user_id=%s AND id > %s
+                                ORDER BY id ASC
+                                LIMIT 1
+                            """, (target_user, album_last_id))
+
+                            next_row = cur.fetchone()
+
+                            cur.close()
+                            conn.close()
+
+                            # Now safe to check
                             if next_row and next_row[0] == mgid:
+                                # Album continues in next batch
                                 pending_album = album_items
                                 pending_mgid = mgid
                                 pending_last_id = album_last_id
                                 break
                             else:
+                                # Album finished here
                                 bot.send_media_group(current_group, album_items)
                                 sent += len(album_items)
                                 last_sent_id = album_last_id
-
-                        else:
-                            bot.send_media_group(current_group, album_items)
-                            sent += len(album_items)
-                            last_sent_id = album_last_id
-                        # Otherwise send immediately
-                        bot.send_media_group(current_group, album_items)
-                        sent += len(album_items)
-                        last_sent_id = album_last_id
 
                     # ================= SINGLE =================
                     else:
