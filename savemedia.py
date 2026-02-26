@@ -14,6 +14,7 @@ DATABASE_URL = os.getenv("DATABASE_URL")
 ADMIN_ID = 8305774350  # Your Telegram ID
 user_sessions = {}
 user_timers = {}
+live_jobs = {}
 FILES_PER_PAGE = 5
 bot = telebot.TeleBot(BOT_TOKEN)
 session_lock = threading.Lock()
@@ -75,6 +76,7 @@ def init_db():
             id SERIAL PRIMARY KEY,
             target_user BIGINT,
             group_id BIGINT,
+            group_title TEXT,
             UNIQUE(target_user, group_id)
         );
     """) 
@@ -237,6 +239,7 @@ def admin_group_input(message):
     if message.forward_from_chat:
 
         group_id = message.forward_from_chat.id
+        group_title = message.forward_from_chat.title
         state["group_id"] = group_id
 
     else:
@@ -312,6 +315,7 @@ def handle_media(message):
     save_user(message.from_user)
 
     media_group_id = message.media_group_id
+    
 
     # ---------- detect file ----------
     if message.content_type == "photo":
@@ -792,7 +796,7 @@ def callback_handler(call):
         conn = get_connection()
         cur = conn.cursor()
         cur.execute("""
-            SELECT group_id FROM user_send_groups
+            SELECT group_id, group_title FROM user_send_groups
             WHERE target_user = %s
             ORDER BY id DESC
             LIMIT 5
@@ -804,14 +808,13 @@ def callback_handler(call):
         markup = InlineKeyboardMarkup()
 
         # Add previous groups as buttons
-        for g in groups:
+        for g_id, g_title in groups:
             markup.add(
                 InlineKeyboardButton(
-                    f"📂 {g[0]}",
-                    callback_data=f"use_group_{g[0]}"
+                    f"📂 {g_title}",
+                    callback_data=f"use_group_{g_id}"
                 )
             )
-
         # Add manual entry option
         markup.add(
             InlineKeyboardButton("➕ Use New Group", callback_data="enter_new_group")
@@ -894,10 +897,11 @@ def callback_handler(call):
 
         # Save group history
         cur.execute("""
-            INSERT INTO user_send_groups (target_user, group_id)
-            VALUES (%s, %s)
-            ON CONFLICT (target_user, group_id) DO NOTHING
-        """, (user_id, group_id))
+            INSERT INTO user_send_groups (target_user, group_id, group_title)
+            VALUES (%s, %s, %s)
+            ON CONFLICT (target_user, group_id)
+            DO UPDATE SET group_title = EXCLUDED.group_title
+        """, (user_id, group_id, group_title))
 
         conn.commit()
         cur.close()
@@ -910,6 +914,7 @@ def callback_handler(call):
         job_queue.put({
             "job_id": job_id,
             "group_id": group_id,
+            "group_title": group_title,
             "rows": rows,
             "speed": speed,
             "total": len(rows),
@@ -943,42 +948,58 @@ def callback_handler(call):
 
         job_id = int(data.split("_")[-1])
 
-        # Update DB (source of truth)
-        conn = get_connection()
-        cur = conn.cursor()
-        cur.execute("""
-            UPDATE send_jobs
-            SET status = 'paused'
-            WHERE id = %s
-        """, (job_id,))
-        conn.commit()
-        cur.close()
-        conn.close()
-
-        # Update memory cache
         with job_status_lock:
             job_status_cache[job_id] = "paused"
 
-        bot.answer_callback_query(call.id, "⏸ Job paused")
+        job = live_jobs.get(job_id)
+
+        if job:
+            sent = job["sent"]
+            total = job["total"]
+            group_title = job["group_title"]
+            chat_id = job["chat_id"]
+            message_id = job["message_id"]
+
+            percent = int((sent / total) * 100) if total else 0
+            bar = build_progress_bar(percent)
+
+            text = (
+                f"⏸ Sending to: {group_title} (Paused)\n\n"
+                f"[{bar}] {percent}%\n\n"
+                f"📊 {sent} / {total} files sent"
+            )
+
+            bot.edit_message_text(text, chat_id, message_id)
+
+        bot.answer_callback_query(call.id, "Paused")
     elif data.startswith("resume_job_"):
 
         job_id = int(data.split("_")[-1])
 
-        conn = get_connection()
-        cur = conn.cursor()
-        cur.execute("""
-            UPDATE send_jobs
-            SET status = 'running'
-            WHERE id = %s
-        """, (job_id,))
-        conn.commit()
-        cur.close()
-        conn.close()
-
         with job_status_lock:
             job_status_cache[job_id] = "running"
 
-        bot.answer_callback_query(call.id, "▶ Job resumed")
+        job = live_jobs.get(job_id)
+
+        if job:
+            sent = job["sent"]
+            total = job["total"]
+            group_title = job["group_title"]
+            chat_id = job["chat_id"]
+            message_id = job["message_id"]
+
+            percent = int((sent / total) * 100) if total else 0
+            bar = build_progress_bar(percent)
+
+            text = (
+                f"▶ Sending to: {group_title}\n\n"
+                f"[{bar}] {percent}%\n\n"
+                f"📊 {sent} / {total} files sent"
+            )
+
+            bot.edit_message_text(text, chat_id, message_id)
+
+        bot.answer_callback_query(call.id, "Resumed")
     
     elif data.startswith("cat_"):
         _, file_type, page = data.split("_")
@@ -1123,7 +1144,13 @@ def queue_worker():
 
         start_time = time.time()
         progress_message = bot.send_message(chat_id, "📤 Sending started...")
-
+        live_jobs[job_id] = {
+            "sent": 0,
+            "total": total,
+            "group_title": job["group_title"],
+            "message_id": progress_message.message_id,
+            "chat_id": chat_id
+        }
         sent = 0
         grouped = {}
 
@@ -1168,6 +1195,7 @@ def queue_worker():
                     bot.send_media_group(group_id, media_list)
                     last_id = items[-1][0]
                     sent += len(items)
+                    live_jobs[job_id]["sent"] = sent
 
                 else:
                     media_id, file_id, file_type, caption = items[0]
@@ -1183,6 +1211,7 @@ def queue_worker():
 
                     last_id = media_id
                     sent += 1
+                    live_jobs[job_id]["sent"] = sent
 
                 # ===== PROGRESS UPDATE (WORKS FOR BOTH SINGLE + ALBUM) =====
                 if sent % 5 == 0 or sent == total:
@@ -1257,10 +1286,11 @@ def queue_worker():
         conn.commit()
         cur.close()
         conn.close()
+        live_jobs.pop(job_id, None)
         with job_status_lock:
             job_status_cache.pop(job_id, None)
     
-
+    
     worker_running = False
 
         # reuse your sender logic here
