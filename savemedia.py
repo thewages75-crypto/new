@@ -353,16 +353,15 @@ def handle_media(message):
             album_buffer[media_group_id] = []
 
         album_buffer[media_group_id].append(
-            (message.chat.id,user_id, file_id, file_type, caption, file_size, media_group_id)
+            (message.chat.id, user_id, file_id, file_type, caption, file_size, media_group_id)
         )
 
-        # cancel old timer
+        # Cancel old timer
         if media_group_id in album_timers:
             album_timers[media_group_id].cancel()
 
-        # wait for album complete
-        def finalize_album(mgid=media_group_id):
-            # itams = album_buffer.pop(mgid, [])
+        # SAFE finalize function
+        def finalize_album(mgid):
             items = album_buffer.pop(mgid, [])
             if not items:
                 return
@@ -374,10 +373,10 @@ def handle_media(message):
             duplicate_count = 0
 
             for item in items:
-                _, u_id, file_id, file_type, caption, file_size, media_group_id = item
-                is_saved = save_media(u_id, file_id, file_type, caption, file_size, media_group_id)
+                _, u_id, file_id, file_type, caption, file_size, mgid = item
+                result = save_media(u_id, file_id, file_type, caption, file_size, mgid)
 
-                if is_saved:
+                if result:
                     saved_count += 1
                 else:
                     duplicate_count += 1
@@ -396,19 +395,21 @@ def handle_media(message):
                 user_sessions[user_id]["saved"] += saved_count
                 user_sessions[user_id]["duplicate"] += duplicate_count
 
-                # reset timer
                 if user_id in user_timers:
                     user_timers[user_id].cancel()
 
-                t = threading.Timer(
+                t2 = threading.Timer(
                     2.0,
                     finalize_user_upload,
                     args=(user_id, chat_id)
                 )
-                user_timers[user_id] = t
-                
-                t.start()
+                user_timers[user_id] = t2
+                t2.start()
 
+        # Start timer properly with argument
+        t = threading.Timer(1.2, finalize_album, args=(media_group_id,))
+        album_timers[media_group_id] = t
+        t.start()
     else:
         # single media
         
