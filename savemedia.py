@@ -873,9 +873,11 @@ def callback_handler(call):
             InlineKeyboardButton("➕ Use New Group", callback_data="enter_new_group")
         )
 
-        bot.send_message(
-            call.message.chat.id,
+        bot.edit_message_text(
+            # call.message.chat.id,
             "📤 Select a previous group or add new one:",
+            call.message.chat.id,
+            call.message.message_id,
             reply_markup=markup
         )
     elif data.startswith("use_group_"):
