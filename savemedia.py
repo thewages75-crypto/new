@@ -18,10 +18,11 @@ FILES_PER_PAGE = 5
 bot = telebot.TeleBot(BOT_TOKEN)
 session_lock = threading.Lock()
 admin_send_state = {}
-admin_active_jobs = {}
 
 
 job_queue = Queue()
+job_status_cache = {}
+job_status_lock = threading.Lock()
 worker_running = False
 # ================= DATABASE ================= #
 
@@ -751,6 +752,8 @@ def callback_handler(call):
         """, (call.from_user.id, user_id, group_id))
 
         job_id = cur.fetchone()[0]
+        with job_status_lock:
+            job_status_cache[job_id] = "running"
 
         conn.commit()
         cur.close()
@@ -795,6 +798,7 @@ def callback_handler(call):
 
         job_id = int(data.split("_")[-1])
 
+        # Update DB (source of truth)
         conn = get_connection()
         cur = conn.cursor()
         cur.execute("""
@@ -805,6 +809,10 @@ def callback_handler(call):
         conn.commit()
         cur.close()
         conn.close()
+
+        # Update memory cache
+        with job_status_lock:
+            job_status_cache[job_id] = "paused"
 
         bot.answer_callback_query(call.id, "⏸ Job paused")
     elif data.startswith("resume_job_"):
@@ -821,6 +829,9 @@ def callback_handler(call):
         conn.commit()
         cur.close()
         conn.close()
+
+        with job_status_lock:
+            job_status_cache[job_id] = "running"
 
         bot.answer_callback_query(call.id, "▶ Job resumed")
     elif data.startswith("cat_"):
@@ -897,7 +908,7 @@ def resume_jobs():
     cur = conn.cursor()
 
     cur.execute("""
-        SELECT id, admin_id, target_user, group_id, last_sent_id
+        SELECT id, target_user, group_id, last_sent_id
         FROM send_jobs
         WHERE is_active = TRUE
     """)
@@ -905,23 +916,37 @@ def resume_jobs():
     cur.close()
     conn.close()
 
-    for job_id, admin_id, target_user, group_id, last_sent_id in jobs:
+    for job_id, target_user, group_id, last_sent_id in jobs:
 
         conn = get_connection()
         cur = conn.cursor()
-
         cur.execute("""
             SELECT id, file_id, file_type, caption, media_group_id
             FROM stored_media
             WHERE user_id=%s AND id > %s
             ORDER BY id ASC
         """, (target_user, last_sent_id))
-
         rows = cur.fetchall()
         cur.close()
         conn.close()
 
-        print(f"Resuming job {job_id}...")
+        if not rows:
+            continue
+
+        with job_status_lock:
+            job_status_cache[job_id] = "running"
+
+        job_queue.put({
+            "job_id": job_id,
+            "group_id": group_id,
+            "rows": rows,
+            "speed": 1,
+            "total": len(rows),
+            "chat_id": ADMIN_ID
+        })
+
+    if not job_queue.empty():
+        start_worker()
 def start_worker():
     global worker_running
 
@@ -934,13 +959,17 @@ def start_worker():
 
 def queue_worker():
     global worker_running
-    while not job_queue.empty():
+    while True:
+        try:
+            job = job_queue.get(timeout=1)
+        except:
+            break
 
         job = job_queue.get()
         total = job["total"]
         chat_id = job["chat_id"]
         start_time = time.time()
-        progress_message = bot.send_message(chat_id, "📤 Sending started...")
+        # progress_message = bot.send_message(chat_id, "📤 Sending started...")
 
         job_id = job["job_id"]
         group_id = job["group_id"]
@@ -963,14 +992,10 @@ def queue_worker():
 
         for items in grouped.values():
 
-            # Wait if paused (do NOT skip items)
+            # Wait if paused (memory check only)
             while True:
-                conn = get_connection()
-                cur = conn.cursor()
-                cur.execute("SELECT status FROM send_jobs WHERE id = %s", (job_id,))
-                status = cur.fetchone()[0]
-                cur.close()
-                conn.close()
+                with job_status_lock:
+                    status = job_status_cache.get(job_id, "running")
 
                 if status == "paused":
                     time.sleep(1)
@@ -991,7 +1016,7 @@ def queue_worker():
                             media_list.append(
                                 telebot.types.InputMediaVideo(file_id, caption=caption)
                             )
-
+                    
                     bot.send_media_group(group_id, media_list)
                     last_id = items[-1][0]
                     sent += len(items)
@@ -1068,6 +1093,8 @@ def queue_worker():
         conn.commit()
         cur.close()
         conn.close()
+        with job_status_lock:
+            job_status_cache.pop(job_id, None)
     
 
     worker_running = False
