@@ -82,6 +82,10 @@ def init_db():
             UNIQUE(target_user, group_id)
         );
     """) 
+    cur.execute("""
+        ALTER TABLE user_send_groups
+        ADD COLUMN IF NOT EXISTS group_title TEXT;
+    """)
     cur.execute("CREATE INDEX IF NOT EXISTS idx_user_media ON stored_media(user_id);")
     cur.execute("CREATE INDEX IF NOT EXISTS idx_saved_at ON stored_media(saved_at);")
 
