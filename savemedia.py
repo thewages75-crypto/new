@@ -456,6 +456,7 @@ def handle_media(message):
         t.start()
     else:
         # single media
+        chat_id = message.chat.id
         
         is_saved = save_media(user_id, file_id, file_type, caption, file_size, None)
 
