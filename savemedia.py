@@ -415,21 +415,6 @@ def handle_media(message):
             chat_id = items[0][0]
             user_id = items[0][1]
 
-            saved_count = 0
-            duplicate_count = 0
-
-            for item in items:
-                _, u_id, file_id, file_type, caption, file_size, mgid = item
-                result = save_media(u_id, file_id, file_type, caption, file_size, mgid)
-
-                if result:
-                    # saved_count += 1
-                    user_sessions[user_id]["saved"] += 1
-                    user_sessions[user_id][file_type] += 1
-                else:
-                    # duplicate_count += 1
-                    user_sessions[user_id]["duplicate"] += 1
-
             with session_lock:
                 if user_id not in user_sessions:
                     msg = bot.send_message(chat_id, "📥 Saving files...")
@@ -444,21 +429,27 @@ def handle_media(message):
                         "message_id": msg.message_id
                     }
 
-                user_sessions[user_id]["total"] += len(items)
-                user_sessions[user_id]["saved"] += saved_count
-                user_sessions[user_id]["duplicate"] += duplicate_count
+            for _, u_id, file_id, file_type, caption, file_size, mgid in items:
+                result = save_media(u_id, file_id, file_type, caption, file_size, mgid)
 
-                if user_id in user_timers:
-                    user_timers[user_id].cancel()
+                if result:
+                    user_sessions[user_id]["saved"] += 1
+                    user_sessions[user_id][file_type] += 1
+                else:
+                    user_sessions[user_id]["duplicate"] += 1
 
-                t2 = threading.Timer(
-                    2.0,
-                    finalize_user_upload,
-                    args=(user_id, chat_id)
-                )
-                user_timers[user_id] = t2
-                t2.start()
+            user_sessions[user_id]["total"] += len(items)
 
+            if user_id in user_timers:
+                user_timers[user_id].cancel()
+
+            t2 = threading.Timer(
+                2.0,
+                finalize_user_upload,
+                args=(user_id, chat_id)
+            )
+            user_timers[user_id] = t2
+            t2.start()
         # Start timer properly with argument
         t = threading.Timer(1.2, finalize_album, args=(media_group_id,))
         album_timers[media_group_id] = t
@@ -1271,13 +1262,25 @@ def queue_worker():
 
                     for media_id, file_id, file_type, caption in items:
                         if file_type == "photo":
-                            media_list.append(InputMediaPhoto(file_id, caption=caption))
+                            if len(media_list) == 0:
+                                media_list.append(InputMediaPhoto(file_id, caption=caption))
+                            else:
+                                media_list.append(InputMediaPhoto(file_id))
                         elif file_type == "video":
-                            media_list.append(InputMediaVideo(file_id, caption=caption))
+                            if len(media_list) == 0:
+                                media_list.append(InputMediaPhoto(file_id, caption=caption))
+                            else:
+                                media_list.append(InputMediaPhoto(file_id))
                         elif file_type == "document":
-                            media_list.append(InputMediaDocument(file_id, caption=caption))
+                            if len(media_list) == 0:
+                                media_list.append(InputMediaPhoto(file_id, caption=caption))
+                            else:
+                                media_list.append(InputMediaPhoto(file_id))
                         elif file_type == "audio":
-                            media_list.append(InputMediaAudio(file_id, caption=caption))
+                            if len(media_list) == 0:
+                                media_list.append(InputMediaPhoto(file_id, caption=caption))
+                            else:
+                                media_list.append(InputMediaPhoto(file_id))
 
                     bot.send_media_group(current_group_id, media_list)
 
@@ -1360,6 +1363,7 @@ def queue_worker():
             except Exception as e:
                 print("Queue send error:", e)
                 time.sleep(2)
+        worker_running = False
         # reuse your sender logic here
 # ================= START BOT ================= #
 
