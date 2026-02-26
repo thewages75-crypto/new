@@ -295,7 +295,7 @@ album_timers = {}
 
 @bot.message_handler(content_types=['photo','video','document','audio'])
 def handle_media(message):
-    print("Media received:", message.content_type)
+
     save_user(message.from_user)
 
     media_group_id = message.media_group_id
@@ -336,7 +336,7 @@ def handle_media(message):
             album_buffer[media_group_id] = []
 
         album_buffer[media_group_id].append(
-            (user_id, file_id, file_type, caption, file_size, media_group_id)
+            (message.chat.id,user_id, file_id, file_type, caption, file_size, media_group_id)
         )
 
         # cancel old timer
@@ -347,19 +347,21 @@ def handle_media(message):
         def finalize_album():
 
             items = album_buffer.pop(media_group_id, [])
+            if not items:
+                return
 
+            chat_id = items[0][0]  # first element is chat_id
             for data in items:
-                print("Saving media:", file_id)
                 save_media(*data)
-
+            bot.send_message(message.chat.id, f"✅ Album with {len(items)} media saved")
         t = threading.Timer(1.2, finalize_album)
         album_timers[media_group_id] = t
         t.start()
 
     else:
-        
         # single media
         save_media(user_id, file_id, file_type, caption, file_size, None)
+        bot.send_message(message.chat.id, "✅ Media saved")
         
 # ================= CATEGORY MENU ================= #
 
