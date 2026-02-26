@@ -1257,31 +1257,23 @@ def queue_worker():
                 # =====================
                 # ALBUM
                 # =====================
-                if len(items) > 1:
+                if len(items) > 1 and all(i[2] in ["photo", "video"] for i in items):
 
                     media_list = []
 
-                    for media_id, file_id, file_type, caption in items:
+                    for index, (media_id, file_id, file_type, caption) in enumerate(items):
+
                         if file_type == "photo":
-                            if len(media_list) == 0:
+                            if index == 0:
                                 media_list.append(InputMediaPhoto(file_id, caption=caption))
                             else:
                                 media_list.append(InputMediaPhoto(file_id))
+
                         elif file_type == "video":
-                            if len(media_list) == 0:
-                                media_list.append(InputMediaPhoto(file_id, caption=caption))
+                            if index == 0:
+                                media_list.append(InputMediaVideo(file_id, caption=caption))
                             else:
-                                media_list.append(InputMediaPhoto(file_id))
-                        elif file_type == "document":
-                            if len(media_list) == 0:
-                                media_list.append(InputMediaPhoto(file_id, caption=caption))
-                            else:
-                                media_list.append(InputMediaPhoto(file_id))
-                        elif file_type == "audio":
-                            if len(media_list) == 0:
-                                media_list.append(InputMediaPhoto(file_id, caption=caption))
-                            else:
-                                media_list.append(InputMediaPhoto(file_id))
+                                media_list.append(InputMediaVideo(file_id))
 
                     bot.send_media_group(current_group_id, media_list)
 
@@ -1363,6 +1355,7 @@ def queue_worker():
 
             except Exception as e:
                 print("Queue send error:", e)
+                live_jobs[job_id]["sent"] = sent
                 time.sleep(2)
         worker_running = False
         # reuse your sender logic here
