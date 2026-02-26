@@ -5,6 +5,7 @@ from datetime import datetime
 import os
 import threading
 import time
+from queue import Queue
 # ================= CONFIG ================= #
 
 BOT_TOKEN = "8606303101:AAGw3fHdI5jpZOOuFCSoHlPKb1Urj4Oidk4"
@@ -18,6 +19,10 @@ bot = telebot.TeleBot(BOT_TOKEN)
 session_lock = threading.Lock()
 admin_send_state = {}
 admin_active_jobs = {}
+
+
+job_queue = Queue()
+worker_running = False
 # ================= DATABASE ================= #
 
 def get_connection():
@@ -34,7 +39,7 @@ def init_db():
             joined_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
         );
     """)
-
+    
     cur.execute("""
         CREATE TABLE IF NOT EXISTS stored_media (
             id SERIAL PRIMARY KEY,
@@ -48,7 +53,17 @@ def init_db():
             file_size BIGINT DEFAULT 0
         );
     """)
-
+    cur.execute("""
+        CREATE TABLE IF NOT EXISTS send_jobs (
+            id SERIAL PRIMARY KEY,
+            admin_id BIGINT,
+            target_user BIGINT,
+            group_id BIGINT,
+            last_sent_id BIGINT DEFAULT 0,
+            is_active BOOLEAN DEFAULT TRUE,
+            created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
+        );
+    """)   
     cur.execute("CREATE INDEX IF NOT EXISTS idx_user_media ON stored_media(user_id);")
     cur.execute("CREATE INDEX IF NOT EXISTS idx_saved_at ON stored_media(saved_at);")
 
@@ -67,6 +82,7 @@ def admin_panel_markup():
     markup.add(InlineKeyboardButton("👥 Total Users", callback_data="admin_users"))
     markup.add(InlineKeyboardButton("📦 Total Files", callback_data="admin_files"))
     markup.add(InlineKeyboardButton("👤 View Users", callback_data="admin_userlist_0"))
+    markup.add(InlineKeyboardButton("📊 Storage Analytics", callback_data="admin_analytics"))
     markup.add(InlineKeyboardButton("🔙 Back", callback_data="menu_main"))
     return markup
 USERS_PER_PAGE = 10
@@ -453,6 +469,76 @@ def callback_handler(call):
             call.message.message_id,
             reply_markup=admin_panel_markup()
         )
+    elif data == "admin_analytics":
+
+        if call.from_user.id != ADMIN_ID:
+            bot.answer_callback_query(call.id, "Unauthorized")
+            return
+
+        conn = get_connection()
+        cur = conn.cursor()
+
+        # Total storage
+        cur.execute("SELECT COALESCE(SUM(file_size),0) FROM stored_media")
+        total_storage = cur.fetchone()[0]
+
+        # Storage by type
+        cur.execute("""
+            SELECT file_type, COALESCE(SUM(file_size),0)
+            FROM stored_media
+            GROUP BY file_type
+        """)
+        type_data = cur.fetchall()
+
+        # Top 5 users
+        cur.execute("""
+            SELECT user_id, COALESCE(SUM(file_size),0) as total
+            FROM stored_media
+            GROUP BY user_id
+            ORDER BY total DESC
+            LIMIT 5
+        """)
+        top_users = cur.fetchall()
+
+        # Last 7 days uploads
+        cur.execute("""
+            SELECT saved_at::date, COUNT(*)
+            FROM stored_media
+            WHERE saved_at >= CURRENT_DATE - INTERVAL '7 days'
+            GROUP BY saved_at::date
+            ORDER BY saved_at::date
+        """)
+        daily_uploads = cur.fetchall()
+
+        cur.close()
+        conn.close()
+
+        # Format results
+        text = "📊 STORAGE ANALYTICS\n\n"
+
+        text += f"📦 Total Storage Used: {format_size(total_storage)}\n\n"
+
+        text += "📁 Storage by Type:\n"
+        for file_type, size in type_data:
+            text += f"• {file_type.capitalize()}: {format_size(size)}\n"
+
+        text += "\n👑 Top 5 Users:\n"
+        for user_id, size in top_users:
+            text += f"• {user_id} → {format_size(size)}\n"
+
+        text += "\n📅 Uploads Last 7 Days:\n"
+        for date, count in daily_uploads:
+            text += f"• {date} → {count} files\n"
+
+        markup = InlineKeyboardMarkup()
+        markup.add(InlineKeyboardButton("🔙 Back", callback_data="admin_panel"))
+
+        bot.edit_message_text(
+            text,
+            call.message.chat.id,
+            call.message.message_id,
+            reply_markup=markup
+        )
     elif data == "admin_files":
         if call.from_user.id != ADMIN_ID:
             bot.answer_callback_query(call.id, "Unauthorized")
@@ -582,6 +668,20 @@ def callback_handler(call):
         admin_send_state[call.from_user.id] = {
             "target_user": user_id
         }
+        markup = InlineKeyboardMarkup()
+        markup.add(
+            InlineKeyboardButton("🚀 Fast", callback_data="speed_fast"),
+            InlineKeyboardButton("⚖ Safe", callback_data="speed_safe"),
+        )
+        markup.add(
+            InlineKeyboardButton("🐢 Ultra Safe", callback_data="speed_ultra")
+        )
+
+        bot.send_message(
+            call.message.chat.id,
+            "⚙ Select sending speed:",
+            reply_markup=markup
+        )
 
         bot.send_message(
             call.message.chat.id,
@@ -592,29 +692,46 @@ def callback_handler(call):
 
         if call.from_user.id in admin_active_jobs:
             admin_active_jobs[call.from_user.id]["cancel"] = True
+    elif data.startswith("speed_"):
+
+        if call.from_user.id not in admin_send_state:
+            return
+
+        speed_map = {
+            "speed_fast": 0.3,
+            "speed_safe": 1,
+            "speed_ultra": 2
+        }
+
+        selected_speed = speed_map.get(data, 1)
+
+        admin_send_state[call.from_user.id]["speed"] = selected_speed
+
+        bot.send_message(
+            call.message.chat.id,
+            "📩 Now forward ANY message from target group\nOR send group ID."
+        )
     elif data == "admin_confirm_send":
 
         if call.from_user.id not in admin_send_state:
+            bot.answer_callback_query(call.id, "Session expired")
             return
 
         state = admin_send_state[call.from_user.id]
 
         user_id = state["target_user"]
         group_id = state.get("group_id")
+        speed = state.get("speed", 1)
 
         if not group_id:
             bot.answer_callback_query(call.id, "Send group first")
-            return
-
-        # prevent duplicate running job
-        if call.from_user.id in admin_active_jobs:
-            bot.answer_callback_query(call.id, "Already sending")
             return
 
         bot.send_message(call.message.chat.id, "📥 Preparing media list...")
 
         conn = get_connection()
         cur = conn.cursor()
+
         cur.execute("""
             SELECT id, file_id, file_type, caption, media_group_id
             FROM stored_media
@@ -622,128 +739,39 @@ def callback_handler(call):
             ORDER BY id ASC
         """, (user_id,))
         rows = cur.fetchall()
+
+        cur.execute("""
+            INSERT INTO send_jobs (admin_id, target_user, group_id)
+            VALUES (%s,%s,%s)
+            RETURNING id
+        """, (call.from_user.id, user_id, group_id))
+
+        job_id = cur.fetchone()[0]
+
+        conn.commit()
         cur.close()
         conn.close()
 
-        total = len(rows)
+        if not rows:
+            bot.send_message(call.message.chat.id, "⚠ No media found.")
+            return
 
-        # mark job active
-        admin_active_jobs[call.from_user.id] = {
-            "cancel": False
-        }
-
-        # cancel button
-        markup = InlineKeyboardMarkup()
-        markup.add(
-            InlineKeyboardButton("🛑 CANCEL SENDING", callback_data="admin_cancel_send")
-        )
+        job_queue.put({
+            "job_id": job_id,
+            "group_id": group_id,
+            "rows": rows,
+            "speed": speed
+        })
 
         bot.send_message(
             call.message.chat.id,
-            f"🚀 Sending started\nTotal files: {total}",
-            reply_markup=markup
+            f"📥 Job added to queue\nTotal files: {len(rows)}"
         )
 
-        # BACKGROUND THREAD
-        from telebot.types import InputMediaPhoto, InputMediaVideo, InputMediaDocument, InputMediaAudio
-
-        def sender():
-
-            sent = 0
-            grouped = {}
-
-            # =========================
-            # GROUP BY media_group_id
-            # =========================
-            for media_id, file_id, file_type, caption, media_group_id in rows:
-
-                if media_group_id:
-                    if media_group_id not in grouped:
-                        grouped[media_group_id] = []
-
-                    grouped[media_group_id].append(
-                        (file_id, file_type, caption)
-                    )
-                else:
-                    # single media use its own id
-                    grouped[f"single_{media_id}"] = [
-                        (file_id, file_type, caption)
-                    ]
-
-            # =========================
-            # SEND LOGIC
-            # =========================
-            for group_key, items in grouped.items():
-
-                if admin_active_jobs[call.from_user.id]["cancel"]:
-                    bot.send_message(call.message.chat.id, "🛑 Sending cancelled")
-                    admin_active_jobs.pop(call.from_user.id, None)
-                    return
-
-                try:
-
-                    # ---------- ALBUM ----------
-                    if len(items) > 1:
-
-                        media_list = []
-
-                        for file_id, file_type, caption in items:
-
-                            if file_type == "photo":
-                                media_list.append(InputMediaPhoto(file_id, caption=caption))
-
-                            elif file_type == "video":
-                                media_list.append(InputMediaVideo(file_id, caption=caption))
-
-                            elif file_type == "document":
-                                media_list.append(InputMediaDocument(file_id, caption=caption))
-
-                            elif file_type == "audio":
-                                media_list.append(InputMediaAudio(file_id, caption=caption))
-
-                        bot.send_media_group(group_id, media_list)
-
-                        sent += len(items)
-
-                    # ---------- SINGLE ----------
-                    else:
-
-                        file_id, file_type, caption = items[0]
-
-                        if file_type == "photo":
-                            bot.send_photo(group_id, file_id, caption=caption)
-
-                        elif file_type == "video":
-                            bot.send_video(group_id, file_id, caption=caption)
-
-                        elif file_type == "document":
-                            bot.send_document(group_id, file_id, caption=caption)
-
-                        elif file_type == "audio":
-                            bot.send_audio(group_id, file_id, caption=caption)
-
-                        sent += 1
-
-                    # progress every 10 files
-                    if sent % 10 == 0:
-                        bot.send_message(
-                            call.message.chat.id,
-                            f"📤 Progress: {sent}/{total}"
-                        )
-
-                    time.sleep(1)  # 1 second delay (safe)
-
-                except Exception as e:
-                    print("Send error:", e)
-                    time.sleep(2)
-
-            bot.send_message(call.message.chat.id, "✅ All media sent")
-
-            admin_active_jobs.pop(call.from_user.id, None)
-            admin_send_state.pop(call.from_user.id, None)
-        threading.Thread(target=sender).start()
+        start_worker()
 
         admin_send_state.pop(call.from_user.id, None)
+    
     elif data == "menu_files":
         bot.edit_message_text(
             "📂 Select Category",
@@ -821,11 +849,146 @@ def stats(message):
         f"📅 Uploads Today: {today_uploads}\n"
         f"🆕 New Users Today: {new_users_today}"
     )
+def resume_jobs():
+    conn = get_connection()
+    cur = conn.cursor()
 
+    cur.execute("""
+        SELECT id, admin_id, target_user, group_id, last_sent_id
+        FROM send_jobs
+        WHERE is_active = TRUE
+    """)
+    jobs = cur.fetchall()
+    cur.close()
+    conn.close()
+
+    for job_id, admin_id, target_user, group_id, last_sent_id in jobs:
+
+        conn = get_connection()
+        cur = conn.cursor()
+
+        cur.execute("""
+            SELECT id, file_id, file_type, caption, media_group_id
+            FROM stored_media
+            WHERE user_id=%s AND id > %s
+            ORDER BY id ASC
+        """, (target_user, last_sent_id))
+
+        rows = cur.fetchall()
+        cur.close()
+        conn.close()
+
+        print(f"Resuming job {job_id}...")
+def start_worker():
+    global worker_running
+
+    if worker_running:
+        return
+
+    worker_running = True
+    threading.Thread(target=queue_worker).start()
+
+
+def queue_worker():
+    global worker_running
+
+    while not job_queue.empty():
+
+        job = job_queue.get()
+
+        job_id = job["job_id"]
+        group_id = job["group_id"]
+        rows = job["rows"]
+        delay = job.get("speed", 1)
+
+        sent = 0
+        grouped = {}
+
+        # Group media
+        for media_id, file_id, file_type, caption, media_group_id in rows:
+            if media_group_id:
+                grouped.setdefault(media_group_id, []).append(
+                    (media_id, file_id, file_type, caption)
+                )
+            else:
+                grouped[f"single_{media_id}"] = [
+                    (media_id, file_id, file_type, caption)
+                ]
+
+        for items in grouped.values():
+
+            try:
+
+                if len(items) > 1:
+                    media_list = []
+
+                    for media_id, file_id, file_type, caption in items:
+                        if file_type == "photo":
+                            media_list.append(
+                                telebot.types.InputMediaPhoto(file_id, caption=caption)
+                            )
+                        elif file_type == "video":
+                            media_list.append(
+                                telebot.types.InputMediaVideo(file_id, caption=caption)
+                            )
+
+                    bot.send_media_group(group_id, media_list)
+                    last_id = items[-1][0]
+                    sent += len(items)
+
+                else:
+                    media_id, file_id, file_type, caption = items[0]
+
+                    if file_type == "photo":
+                        bot.send_photo(group_id, file_id, caption=caption)
+                    elif file_type == "video":
+                        bot.send_video(group_id, file_id, caption=caption)
+                    elif file_type == "document":
+                        bot.send_document(group_id, file_id, caption=caption)
+                    elif file_type == "audio":
+                        bot.send_audio(group_id, file_id, caption=caption)
+
+                    last_id = media_id
+                    sent += 1
+
+                time.sleep(delay)
+
+                # Update resume
+                conn = get_connection()
+                cur = conn.cursor()
+                cur.execute("""
+                    UPDATE send_jobs
+                    SET last_sent_id = %s
+                    WHERE id = %s
+                """, (last_id, job_id))
+                conn.commit()
+                cur.close()
+                conn.close()
+
+            except Exception as e:
+                print("Queue send error:", e)
+                time.sleep(2)
+
+        # Mark job complete
+        conn = get_connection()
+        cur = conn.cursor()
+        cur.execute("""
+            UPDATE send_jobs
+            SET is_active = FALSE
+            WHERE id = %s
+        """, (job_id,))
+        conn.commit()
+        cur.close()
+        conn.close()
+
+    worker_running = False
+
+        # reuse your sender logic here
 # ================= START BOT ================= #
 
 if __name__ == "__main__":
     init_db()
+    resume_jobs()   # ADD THIS LINE
     bot.remove_webhook()
     print("Bot is running...")
     bot.infinity_polling(skip_pending=True)
