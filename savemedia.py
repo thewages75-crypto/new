@@ -1162,7 +1162,11 @@ def resume_jobs():
     conn.close()
 
     for job_id, target_user, group_id, last_sent_id in jobs:
-
+        try:
+            chat = bot.get_chat(group_id)
+            group_title = chat.title
+        except:
+            group_title = str(group_id)
         conn = get_connection()
         cur = conn.cursor()
         cur.execute("""
@@ -1184,6 +1188,7 @@ def resume_jobs():
         job_queue.put({
             "job_id": job_id,
             "group_id": group_id,
+            "group_title": group_title,  # ✅ FIX
             "rows": rows,
             "speed": 1,
             "total": len(rows),
