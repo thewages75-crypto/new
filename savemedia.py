@@ -1,11 +1,13 @@
 import telebot
 from telebot.types import InlineKeyboardMarkup, InlineKeyboardButton
+from telebot.types import InputMediaPhoto, InputMediaVideo, InputMediaDocument, InputMediaAudio
 import psycopg2
 from datetime import datetime
 import os
 import threading
 import time
 from queue import Queue
+
 # ================= CONFIG ================= #
 
 BOT_TOKEN = "8606303101:AAGw3fHdI5jpZOOuFCSoHlPKb1Urj4Oidk4"
@@ -263,7 +265,7 @@ def admin_group_input(message):
             f"✅ Group changed to: {group_title}\nPress Resume to continue."
         )
 
-        del admin_send_state[call.from_user.id]["changing_job"]
+        del admin_send_state[message.from_user.id]["changing_job"]
         return
 
     if message.from_user.id not in admin_send_state:
@@ -447,12 +449,8 @@ def handle_media(message):
                 t2.start()
 
         # Start timer properly with argument
-        t = threading.Timer(
-            2.0,
-            finalize_user_upload,
-            args=(user_id, message.chat.id)
-        )
-        user_timers[user_id] = t
+        t = threading.Timer(1.2, finalize_album, args=(media_group_id,))
+        album_timers[media_group_id] = t
         t.start()
     else:
         # single media
@@ -479,16 +477,14 @@ def handle_media(message):
             # reset timer
             if user_id in user_timers:
                 user_timers[user_id].cancel()
-
             t = threading.Timer(
                 2.0,
                 finalize_user_upload,
                 args=(user_id, message.chat.id)
             )
             user_timers[user_id] = t
-            t = threading.Timer(1.2, finalize_album)
-            album_timers[media_group_id] = t
             t.start()
+
         
 # ================= CATEGORY MENU ================= #
 
@@ -1280,8 +1276,8 @@ def queue_worker():
 
                 time.sleep(delay)
 
-            except Exception as e:
-                print("Send error:", e)
+            # except Exception as e:
+            #     print("Send error:", e)
                 # ===== PROGRESS UPDATE (WORKS FOR BOTH SINGLE + ALBUM) =====
                 if sent % 5 == 0 or sent == total:
 
