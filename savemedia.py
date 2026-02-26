@@ -295,7 +295,7 @@ album_timers = {}
 
 @bot.message_handler(content_types=['photo','video','document','audio'])
 def handle_media(message):
-
+    print("Media received:", message.content_type)
     save_user(message.from_user)
 
     media_group_id = message.media_group_id
@@ -349,6 +349,7 @@ def handle_media(message):
             items = album_buffer.pop(media_group_id, [])
 
             for data in items:
+                print("Saving media:", file_id)
                 save_media(*data)
 
         t = threading.Timer(1.2, finalize_album)
@@ -356,6 +357,7 @@ def handle_media(message):
         t.start()
 
     else:
+        
         # single media
         save_media(user_id, file_id, file_type, caption, file_size, None)
         
@@ -767,6 +769,7 @@ def callback_handler(call):
             "total": len(rows),
             "chat_id": call.message.chat.id
         })
+        start_worker()
         markup = InlineKeyboardMarkup()
         markup.add(
             InlineKeyboardButton("⏸ Pause", callback_data=f"pause_job_{job_id}"),
@@ -779,7 +782,7 @@ def callback_handler(call):
             reply_markup=markup
         )
 
-        start_worker()
+        
 
         admin_send_state.pop(call.from_user.id, None)
     
