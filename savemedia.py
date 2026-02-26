@@ -1257,6 +1257,15 @@ def queue_worker():
                 current_group = live_jobs[job_id]["group_id"]
 
                 try:
+                    if pending_mgid and mgid != pending_mgid:
+                        # Send leftover pending album first
+                        bot.send_media_group(current_group, pending_album)
+                        sent += len(pending_album)
+                        last_sent_id = pending_last_id
+
+                        pending_album = []
+                        pending_mgid = None
+                        pending_last_id = None
 
                     # ================= CONTINUE PENDING ALBUM =================
                     if pending_mgid and mgid == pending_mgid:
@@ -1312,11 +1321,35 @@ def queue_worker():
                             album_last_id = m_id
                             i += 1
                         # If batch ended but album not finished → store pending
+                        # Check if album might continue in next batch
                         if i == len(rows):
-                            pending_album = album_items
-                            pending_mgid = mgid
-                            pending_last_id = album_last_id
-                            break
+
+                            # Look ahead in DB
+                            conn = get_connection()
+                            cur = conn.cursor()
+                            cur.execute("""
+                                SELECT media_group_id
+                                FROM stored_media
+                                WHERE user_id=%s AND id > %s
+                                ORDER BY id ASC
+                                LIMIT 1
+                            """, (target_user, album_last_id))
+
+                            next_row = cur.fetchone()
+                            cur.close()
+                            conn.close()
+
+                            if next_row and next_row[0] == mgid:
+                                # Album continues in next batch
+                                pending_album = album_items
+                                pending_mgid = mgid
+                                pending_last_id = album_last_id
+                                break
+                            else:
+                                # Album actually finished here
+                                bot.send_media_group(current_group, album_items)
+                                sent += len(album_items)
+                                last_sent_id = album_last_id
 
                         # Otherwise send immediately
                         bot.send_media_group(current_group, album_items)
