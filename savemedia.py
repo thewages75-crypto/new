@@ -424,6 +424,7 @@ def handle_media(message):
 
                 if result:
                     saved_count += 1
+                    user_sessions[user_id][file_type] += 1
                 else:
                     duplicate_count += 1
 
@@ -434,6 +435,10 @@ def handle_media(message):
                         "total": 0,
                         "saved": 0,
                         "duplicate": 0,
+                        "photo": 0,
+                        "video": 0,
+                        "document": 0,
+                        "audio": 0,
                         "message_id": msg.message_id
                     }
 
@@ -475,6 +480,7 @@ def handle_media(message):
 
             if is_saved:
                 user_sessions[user_id]["saved"] += 1
+                user_sessions[user_id][file_type] += 1
             else:
                 user_sessions[user_id]["duplicate"] += 1
 
