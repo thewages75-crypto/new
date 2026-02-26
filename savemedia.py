@@ -1247,10 +1247,13 @@ def queue_worker():
             while job_status_cache[job_id] == "paused":
                 time.sleep(1)
 
-            # 🔁 ALWAYS fetch latest group_id
+            # Always get latest group
             current_group_id = live_jobs[job_id]["group_id"]
 
             try:
+                # =====================
+                # ALBUM
+                # =====================
                 if len(items) > 1:
 
                     media_list = []
@@ -1260,9 +1263,19 @@ def queue_worker():
                             media_list.append(InputMediaPhoto(file_id, caption=caption))
                         elif file_type == "video":
                             media_list.append(InputMediaVideo(file_id, caption=caption))
+                        elif file_type == "document":
+                            media_list.append(InputMediaDocument(file_id, caption=caption))
+                        elif file_type == "audio":
+                            media_list.append(InputMediaAudio(file_id, caption=caption))
 
                     bot.send_media_group(current_group_id, media_list)
 
+                    sent += len(items)
+                    last_id = items[-1][0]  # ✅ correct last_id for album
+
+                # =====================
+                # SINGLE
+                # =====================
                 else:
                     media_id, file_id, file_type, caption = items[0]
 
@@ -1275,14 +1288,14 @@ def queue_worker():
                     elif file_type == "audio":
                         bot.send_audio(current_group_id, file_id, caption=caption)
 
-                sent += len(items) if len(items) > 1 else 1
+                    sent += 1
+                    last_id = media_id  # ✅ correct last_id for single
+
                 live_jobs[job_id]["sent"] = sent
 
-                time.sleep(delay)
-
-            # except Exception as e:
-            #     print("Send error:", e)
-                # ===== PROGRESS UPDATE (WORKS FOR BOTH SINGLE + ALBUM) =====
+                # =====================
+                # PROGRESS UPDATE
+                # =====================
                 if sent % 5 == 0 or sent == total:
 
                     percent = int((sent / total) * 100)
@@ -1299,7 +1312,6 @@ def queue_worker():
 
                     minutes = eta_seconds // 60
                     seconds = eta_seconds % 60
-
                     eta_text = f"{minutes}m {seconds}s" if eta_seconds > 0 else "calculating..."
 
                     bar = build_progress_bar(percent)
@@ -1317,9 +1329,10 @@ def queue_worker():
                         chat_id,
                         progress_message.message_id
                     )
-                time.sleep(delay)
 
-                # Update resume position
+                # =====================
+                # UPDATE RESUME POSITION
+                # =====================
                 conn = get_connection()
                 cur = conn.cursor()
                 cur.execute("""
@@ -1331,37 +1344,11 @@ def queue_worker():
                 cur.close()
                 conn.close()
 
+                time.sleep(delay)
+
             except Exception as e:
                 print("Queue send error:", e)
                 time.sleep(2)
-        # ===== FINAL COMPLETION MESSAGE =====
-        total_time = round(time.time() - start_time, 2)
-
-        bot.edit_message_text(
-            "✅ Job Completed\n\n"
-            f"📊 {total}/{total} files sent\n"
-            f"⏱ Total time: {total_time} sec",
-            chat_id,
-            progress_message.message_id
-        )
-        # Mark job complete
-        conn = get_connection()
-        cur = conn.cursor()
-        cur.execute("""
-            UPDATE send_jobs
-            SET is_active = FALSE
-            WHERE id = %s
-        """, (job_id,))
-        conn.commit()
-        cur.close()
-        conn.close()
-        live_jobs.pop(job_id, None)
-        with job_status_lock:
-            job_status_cache.pop(job_id, None)
-    
-    
-    worker_running = False
-
         # reuse your sender logic here
 # ================= START BOT ================= #
 
