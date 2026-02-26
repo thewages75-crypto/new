@@ -818,11 +818,9 @@ def callback_handler(call):
             InlineKeyboardButton("🐢 Ultra Safe", callback_data="speed_ultra")
         )
 
-        bot.edit_message_text(
-            "⚙ Select sending speed:",
+        bot.send_message(
             call.message.chat.id,
-            call.message.message_id,
-            
+            "⚙ Select sending speed:",
             reply_markup=markup
         )
     elif data == "admin_cancel_send":
@@ -873,11 +871,9 @@ def callback_handler(call):
             InlineKeyboardButton("➕ Use New Group", callback_data="enter_new_group")
         )
 
-        bot.edit_message_text(
-            # call.message.chat.id,
-            "📤 Select a previous group or add new one:",
+        bot.send_message(
             call.message.chat.id,
-            call.message.message_id,
+            "📤 Select a previous group or add new one:",
             reply_markup=markup
         )
     elif data.startswith("use_group_"):
@@ -934,8 +930,7 @@ def callback_handler(call):
             bot.answer_callback_query(call.id, "Send group first")
             return
 
-        temp_msg =bot.send_message(call.message.chat.id, "📥 Preparing media list...")
-        bot.delete_message(call.message.chat.id, temp_msg.message_id)
+        bot.send_message(call.message.chat.id, "📥 Preparing media list...")
         conn = get_connection()
         cur = conn.cursor()
 
@@ -1232,7 +1227,6 @@ def queue_worker():
 
         start_time = time.time()
         progress_message = bot.send_message(chat_id, "📤 Sending started...")
-        bot.delete_message(chat_id, progress_message.message_id)
         live_jobs[job_id] = {
             "sent": 0,
             "total": total,
