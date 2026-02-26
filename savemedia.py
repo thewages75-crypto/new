@@ -688,12 +688,6 @@ def callback_handler(call):
             "⚙ Select sending speed:",
             reply_markup=markup
         )
-
-        bot.send_message(
-            call.message.chat.id,
-            "📩 Forward ANY message from the target group\n\n"
-            "OR send the group ID."
-        )
     elif data == "admin_cancel_send":
 
         if call.from_user.id in admin_active_jobs:
@@ -763,7 +757,8 @@ def callback_handler(call):
         if not rows:
             bot.send_message(call.message.chat.id, "⚠ No media found.")
             return
-
+        with job_status_lock:
+            job_status_cache[job_id] = "running"
         job_queue.put({
             "job_id": job_id,
             "group_id": group_id,
@@ -963,14 +958,18 @@ def build_progress_bar(percent, length=20):
 
 def queue_worker():
     global worker_running
-    while not job_queue.empty():
+    while True:
+        try:
+            job = job_queue.get(timeout=1)
+        except:
+            break
 
         job = job_queue.get()
+        progress_message = bot.send_message(chat_id, "📤 Sending started...")
         total = job["total"]
         chat_id = job["chat_id"]
         start_time = time.time()
-        progress_message = bot.send_message(chat_id, "📤 Sending started...")
-
+        
         job_id = job["job_id"]
         group_id = job["group_id"]
         rows = job["rows"]
