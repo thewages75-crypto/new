@@ -1255,6 +1255,32 @@ def queue_worker():
 
                 media_id, file_id, file_type, caption, mgid = rows[i]
                 current_group = live_jobs[job_id]["group_id"]
+                # ===== SAFE PENDING FLUSH =====
+                if pending_album and pending_mgid != mgid:
+
+                    bot.send_media_group(current_group, pending_album)
+                    sent += len(pending_album)
+                    last_sent_id = pending_last_id
+
+                    # Update DB immediately
+                    conn = get_connection()
+                    cur = conn.cursor()
+                    cur.execute("""
+                        UPDATE send_jobs
+                        SET last_sent_id=%s
+                        WHERE id=%s
+                    """, (last_sent_id, job_id))
+                    conn.commit()
+                    cur.close()
+                    conn.close()
+
+                    # Clear pending buffer
+                    pending_album = []
+                    pending_mgid = None
+                    pending_last_id = None
+
+                    # DO NOT increment i here
+                    # Let this same row be processed normally
 
                 try:
                     if pending_mgid and mgid != pending_mgid:
@@ -1324,33 +1350,18 @@ def queue_worker():
                         # Check if album might continue in next batch
                         if i == len(rows):
 
-                            conn = get_connection()
-                            cur = conn.cursor()
-                            cur.execute("""
-                                SELECT media_group_id
-                                FROM stored_media
-                                WHERE user_id=%s AND id > %s
-                                ORDER BY id ASC
-                                LIMIT 1
-                            """, (target_user, album_last_id))
-
-                            next_row = cur.fetchone()
-                            cur.close()
-                            conn.close()
-
+                            # check if continues
                             if next_row and next_row[0] == mgid:
-                                # Album continues
                                 pending_album = album_items
                                 pending_mgid = mgid
                                 pending_last_id = album_last_id
                                 break
                             else:
-                                # Album finished
                                 bot.send_media_group(current_group, album_items)
                                 sent += len(album_items)
                                 last_sent_id = album_last_id
+
                         else:
-                            # Normal case (not end of batch)
                             bot.send_media_group(current_group, album_items)
                             sent += len(album_items)
                             last_sent_id = album_last_id
