@@ -696,6 +696,7 @@ def callback_handler(call):
         text = (
             f"👤 User ID: {user_id}\n\n"
             f"📦 Total Files: {total}\n"
+            f"💾 Storage Used: {format_size(get_storage_used(user_id))}\n\n"
             f"📷 Photos: {cats.get('photo',0)}\n"
             f"🎥 Videos: {cats.get('video',0)}\n"
             f"📄 Documents: {cats.get('document',0)}\n"
@@ -888,8 +889,8 @@ def callback_handler(call):
         cur.close()
         conn.close()
         job_id = cur.fetchone()[0]
-        with job_status_lock:
-            job_status_cache[job_id] = "running"
+        # with job_status_lock:
+        #     job_status_cache[job_id] = "running"
 
         conn.commit()
         cur.close()
@@ -1107,16 +1108,15 @@ def queue_worker():
         except:
             break
 
-        job = job_queue.get()
-        progress_message = bot.send_message(chat_id, "📤 Sending started...")
         total = job["total"]
         chat_id = job["chat_id"]
-        start_time = time.time()
-        
         job_id = job["job_id"]
         group_id = job["group_id"]
         rows = job["rows"]
         delay = job.get("speed", 1)
+
+        start_time = time.time()
+        progress_message = bot.send_message(chat_id, "📤 Sending started...")
 
         sent = 0
         grouped = {}
