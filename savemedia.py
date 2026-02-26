@@ -289,6 +289,8 @@ def finalize_user_upload(user_id, chat_id):
             f"✅ Saved: {session['saved']}\n"
             f"♻️ Skipped (Duplicates): {session['duplicate']}\n\n"
             f"📦 Total Files: {total_files}\n"
+            f"📦 Total Files: {total_files}\n"
+            f"🎬 Total Video Files: {session['video']} \n"
             f"💾 Total Size: {total_size}"
         )
     else:
@@ -297,6 +299,8 @@ def finalize_user_upload(user_id, chat_id):
             f"Total Sent: {session['total']}\n"
             f"✅ Saved: {session['saved']}\n\n"
             f"📦 Total Files: {total_files}\n"
+            f"🎬 Total Video Files: {session['video']} \n"
+            f"🖼️ Total Photo Files: {session['photo']} \n"
             f"💾 Total Size: {total_size}"
         )
 
