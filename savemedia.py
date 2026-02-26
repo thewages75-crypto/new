@@ -962,19 +962,20 @@ def queue_worker():
                 ]
 
         for items in grouped.values():
-            # Check pause state
-            conn = get_connection()
-            cur = conn.cursor()
-            cur.execute("""
-                SELECT status FROM send_jobs WHERE id = %s
-            """, (job_id,))
-            status = cur.fetchone()[0]
-            cur.close()
-            conn.close()
 
-            if status == "paused":
-                time.sleep(1)
-                continue
+            # Wait if paused (do NOT skip items)
+            while True:
+                conn = get_connection()
+                cur = conn.cursor()
+                cur.execute("SELECT status FROM send_jobs WHERE id = %s", (job_id,))
+                status = cur.fetchone()[0]
+                cur.close()
+                conn.close()
+
+                if status == "paused":
+                    time.sleep(1)
+                else:
+                    break
 
             try:
 
@@ -1009,38 +1010,34 @@ def queue_worker():
 
                     last_id = media_id
                     sent += 1
-                    # Update progress every 5 files
-                    if sent % 5 == 0 or sent == total:
 
-                        percent = int((sent / total) * 100)
+                # ===== PROGRESS UPDATE (WORKS FOR BOTH SINGLE + ALBUM) =====
+                if sent % 5 == 0 or sent == total:
 
-                        elapsed = time.time() - start_time
+                    percent = int((sent / total) * 100)
+                    elapsed = time.time() - start_time
 
-                        if sent > 0:
-                            avg_time_per_file = elapsed / sent
-                            remaining_files = total - sent
-                            eta_seconds = int(avg_time_per_file * remaining_files)
-                        else:
-                            eta_seconds = 0
+                    if sent > 0:
+                        avg_time = elapsed / sent
+                        remaining = total - sent
+                        eta_seconds = int(avg_time * remaining)
+                    else:
+                        eta_seconds = 0
 
-                        minutes = eta_seconds // 60
-                        seconds = eta_seconds % 60
+                    minutes = eta_seconds // 60
+                    seconds = eta_seconds % 60
 
-                        eta_text = f"{minutes}m {seconds}s" if eta_seconds > 0 else "calculating..."
+                    eta_text = f"{minutes}m {seconds}s" if eta_seconds > 0 else "calculating..."
 
-                        bot.edit_message_text(
-                            f"📤 {percent}% | {sent}/{total} files\n⏳ ETA: {eta_text}",
-                            chat_id,
-                            progress_message.message_id
-                        )
-                        bot.edit_message_text(
-                            f"✅ Completed\n{total}/{total} files sent",
-                            chat_id,
-                            progress_message.message_id
-                        )
+                    bot.edit_message_text(
+                        f"📤 {percent}% | {sent}/{total} files\n⏳ ETA: {eta_text}",
+                        chat_id,
+                        progress_message.message_id
+                    )
+
                 time.sleep(delay)
 
-                # Update resume
+                # Update resume position
                 conn = get_connection()
                 cur = conn.cursor()
                 cur.execute("""
@@ -1055,7 +1052,11 @@ def queue_worker():
             except Exception as e:
                 print("Queue send error:", e)
                 time.sleep(2)
-
+        bot.edit_message_text(
+            f"✅ Completed\n{total}/{total} files sent",
+            chat_id,
+            progress_message.message_id
+        )
         # Mark job complete
         conn = get_connection()
         cur = conn.cursor()
@@ -1067,6 +1068,7 @@ def queue_worker():
         conn.commit()
         cur.close()
         conn.close()
+    
 
     worker_running = False
 
