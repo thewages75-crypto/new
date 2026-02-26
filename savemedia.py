@@ -872,23 +872,28 @@ def callback_handler(call):
         """, (user_id,))
         rows = cur.fetchall()
 
+        conn = get_connection()
+        cur = conn.cursor()
+
+        # 1️⃣ Create job
         cur.execute("""
             INSERT INTO send_jobs (admin_id, target_user, group_id)
             VALUES (%s,%s,%s)
             RETURNING id
         """, (call.from_user.id, user_id, group_id))
-        # Save group history for this user
-        conn = get_connection()
-        cur = conn.cursor()
+
+        job_id = cur.fetchone()[0]   # ✅ fetch immediately
+
+        # 2️⃣ Save group history
         cur.execute("""
             INSERT INTO user_send_groups (target_user, group_id)
             VALUES (%s, %s)
             ON CONFLICT (target_user, group_id) DO NOTHING
         """, (user_id, group_id))
+
         conn.commit()
         cur.close()
         conn.close()
-        job_id = cur.fetchone()[0]
         # with job_status_lock:
         #     job_status_cache[job_id] = "running"
 
