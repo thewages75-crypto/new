@@ -275,13 +275,15 @@ def finalize_user_upload(user_id, chat_id):
             f"✅ Saved: {session['saved']}\n"
             f"♻️ Skipped (Duplicates): {session['duplicate']}\n\n"
             f"📦 Total Files: {total_files}\n"
-            f"💾 Total Size: {total_size}",
+            f"💾 Total Size: {total_size}"
         )
     else:
         text = (
-            f"✅ {session['saved']} file(s) saved\n"
+            f"📦 Upload Completed\n\n"
+            f"Total Sent: {session['total']}\n"
+            f"✅ Saved: {session['saved']}\n\n"
             f"📦 Total Files: {total_files}\n"
-            f"💾 Total Size: {total_size}",
+            f"💾 Total Size: {total_size}"
         )
 
     bot.edit_message_text(
@@ -350,18 +352,80 @@ def handle_media(message):
             if not items:
                 return
 
-            chat_id = items[0][0]  # first element is chat_id
-            for data in items:
-                save_media(*data)
-            bot.send_message(message.chat.id, f"✅ Album with {len(items)} media saved")
-        t = threading.Timer(1.2, finalize_album)
-        album_timers[media_group_id] = t
-        t.start()
+            chat_id = items[0][0]
+            user_id = items[0][1]
+
+            saved_count = 0
+            duplicate_count = 0
+
+            for item in items:
+                _, u_id, file_id, file_type, caption, file_size, media_group_id = item
+                is_saved = save_media(u_id, file_id, file_type, caption, file_size, media_group_id)
+
+                if is_saved:
+                    saved_count += 1
+                else:
+                    duplicate_count += 1
+
+            with session_lock:
+                if user_id not in user_sessions:
+                    msg = bot.send_message(chat_id, "📥 Saving files...")
+                    user_sessions[user_id] = {
+                        "total": 0,
+                        "saved": 0,
+                        "duplicate": 0,
+                        "message_id": msg.message_id
+                    }
+
+                user_sessions[user_id]["total"] += len(items)
+                user_sessions[user_id]["saved"] += saved_count
+                user_sessions[user_id]["duplicate"] += duplicate_count
+
+                # reset timer
+                if user_id in user_timers:
+                    user_timers[user_id].cancel()
+
+                t = threading.Timer(
+                    2.0,
+                    finalize_user_upload,
+                    args=(user_id, chat_id)
+                )
+                user_timers[user_id] = t
+                t.start()
 
     else:
         # single media
-        save_media(user_id, file_id, file_type, caption, file_size, None)
-        bot.send_message(message.chat.id, "✅ Media saved")
+        
+        is_saved = save_media(user_id, file_id, file_type, caption, file_size, None)
+
+        with session_lock:
+            if user_id not in user_sessions:
+                msg = bot.send_message(message.chat.id, "📥 Saving files...")
+                user_sessions[user_id] = {
+                    "total": 0,
+                    "saved": 0,
+                    "duplicate": 0,
+                    "message_id": msg.message_id
+                }
+
+            user_sessions[user_id]["total"] += 1
+
+            if is_saved:
+                user_sessions[user_id]["saved"] += 1
+            else:
+                user_sessions[user_id]["duplicate"] += 1
+
+            # reset timer
+            if user_id in user_timers:
+                user_timers[user_id].cancel()
+
+            t = threading.Timer(
+                2.0,
+                finalize_user_upload,
+                args=(user_id, message.chat.id)
+            )
+            user_timers[user_id] = t
+            t.start()
         
 # ================= CATEGORY MENU ================= #
 
