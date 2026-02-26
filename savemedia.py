@@ -860,10 +860,10 @@ def callback_handler(call):
             return
 
         bot.send_message(call.message.chat.id, "📥 Preparing media list...")
-
         conn = get_connection()
         cur = conn.cursor()
 
+        # Fetch media
         cur.execute("""
             SELECT id, file_id, file_type, caption, media_group_id
             FROM stored_media
@@ -872,19 +872,16 @@ def callback_handler(call):
         """, (user_id,))
         rows = cur.fetchall()
 
-        conn = get_connection()
-        cur = conn.cursor()
-
-        # 1️⃣ Create job
+        # Create job
         cur.execute("""
             INSERT INTO send_jobs (admin_id, target_user, group_id)
             VALUES (%s,%s,%s)
             RETURNING id
         """, (call.from_user.id, user_id, group_id))
 
-        job_id = cur.fetchone()[0]   # ✅ fetch immediately
+        job_id = cur.fetchone()[0]
 
-        # 2️⃣ Save group history
+        # Save group history
         cur.execute("""
             INSERT INTO user_send_groups (target_user, group_id)
             VALUES (%s, %s)
@@ -894,13 +891,6 @@ def callback_handler(call):
         conn.commit()
         cur.close()
         conn.close()
-        # with job_status_lock:
-        #     job_status_cache[job_id] = "running"
-
-        conn.commit()
-        cur.close()
-        conn.close()
-
         if not rows:
             bot.send_message(call.message.chat.id, "⚠ No media found.")
             return
