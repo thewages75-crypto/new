@@ -63,6 +63,10 @@ def init_db():
             is_active BOOLEAN DEFAULT TRUE,
             created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
         );
+    """)
+    cur.execute("""
+        ALTER TABLE send_jobs
+        ADD COLUMN IF NOT EXISTS status TEXT DEFAULT 'running'
     """)   
     cur.execute("CREATE INDEX IF NOT EXISTS idx_user_media ON stored_media(user_id);")
     cur.execute("CREATE INDEX IF NOT EXISTS idx_saved_at ON stored_media(saved_at);")
@@ -760,12 +764,20 @@ def callback_handler(call):
             "job_id": job_id,
             "group_id": group_id,
             "rows": rows,
-            "speed": speed
+            "speed": speed,
+            "total": len(rows),
+            "chat_id": call.message.chat.id
         })
+        markup = InlineKeyboardMarkup()
+        markup.add(
+            InlineKeyboardButton("⏸ Pause", callback_data=f"pause_job_{job_id}"),
+            InlineKeyboardButton("▶ Resume", callback_data=f"resume_job_{job_id}")
+        )
 
         bot.send_message(
             call.message.chat.id,
-            f"📥 Job added to queue\nTotal files: {len(rows)}"
+            f"🚀 Sending started\nTotal files: {len(rows)}",
+            reply_markup=markup
         )
 
         start_worker()
@@ -779,7 +791,38 @@ def callback_handler(call):
             call.message.message_id,
             reply_markup=category_menu(call.from_user.id)
         )
+    elif data.startswith("pause_job_"):
 
+        job_id = int(data.split("_")[-1])
+
+        conn = get_connection()
+        cur = conn.cursor()
+        cur.execute("""
+            UPDATE send_jobs
+            SET status = 'paused'
+            WHERE id = %s
+        """, (job_id,))
+        conn.commit()
+        cur.close()
+        conn.close()
+
+        bot.answer_callback_query(call.id, "⏸ Job paused")
+    elif data.startswith("resume_job_"):
+
+        job_id = int(data.split("_")[-1])
+
+        conn = get_connection()
+        cur = conn.cursor()
+        cur.execute("""
+            UPDATE send_jobs
+            SET status = 'running'
+            WHERE id = %s
+        """, (job_id,))
+        conn.commit()
+        cur.close()
+        conn.close()
+
+        bot.answer_callback_query(call.id, "▶ Job resumed")
     elif data.startswith("cat_"):
         _, file_type, page = data.split("_")
         page = int(page)
@@ -891,10 +934,13 @@ def start_worker():
 
 def queue_worker():
     global worker_running
-
     while not job_queue.empty():
 
         job = job_queue.get()
+        total = job["total"]
+        chat_id = job["chat_id"]
+        start_time = time.time()
+        progress_message = bot.send_message(chat_id, "📤 Sending started...")
 
         job_id = job["job_id"]
         group_id = job["group_id"]
@@ -916,6 +962,19 @@ def queue_worker():
                 ]
 
         for items in grouped.values():
+            # Check pause state
+            conn = get_connection()
+            cur = conn.cursor()
+            cur.execute("""
+                SELECT status FROM send_jobs WHERE id = %s
+            """, (job_id,))
+            status = cur.fetchone()[0]
+            cur.close()
+            conn.close()
+
+            if status == "paused":
+                time.sleep(1)
+                continue
 
             try:
 
@@ -950,7 +1009,35 @@ def queue_worker():
 
                     last_id = media_id
                     sent += 1
+                    # Update progress every 5 files
+                    if sent % 5 == 0 or sent == total:
 
+                        percent = int((sent / total) * 100)
+
+                        elapsed = time.time() - start_time
+
+                        if sent > 0:
+                            avg_time_per_file = elapsed / sent
+                            remaining_files = total - sent
+                            eta_seconds = int(avg_time_per_file * remaining_files)
+                        else:
+                            eta_seconds = 0
+
+                        minutes = eta_seconds // 60
+                        seconds = eta_seconds % 60
+
+                        eta_text = f"{minutes}m {seconds}s" if eta_seconds > 0 else "calculating..."
+
+                        bot.edit_message_text(
+                            f"📤 {percent}% | {sent}/{total} files\n⏳ ETA: {eta_text}",
+                            chat_id,
+                            progress_message.message_id
+                        )
+                        bot.edit_message_text(
+                            f"✅ Completed\n{total}/{total} files sent",
+                            chat_id,
+                            progress_message.message_id
+                        )
                 time.sleep(delay)
 
                 # Update resume
