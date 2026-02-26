@@ -18,6 +18,7 @@ FILES_PER_PAGE = 5
 bot = telebot.TeleBot(BOT_TOKEN)
 session_lock = threading.Lock()
 admin_send_state = {}
+admin_active_jobs = {}
 
 
 job_queue = Queue()
@@ -959,17 +960,13 @@ def start_worker():
 
 def queue_worker():
     global worker_running
-    while True:
-        try:
-            job = job_queue.get(timeout=1)
-        except:
-            break
+    while not job_queue.empty():
 
         job = job_queue.get()
         total = job["total"]
         chat_id = job["chat_id"]
         start_time = time.time()
-        # progress_message = bot.send_message(chat_id, "📤 Sending started...")
+        progress_message = bot.send_message(chat_id, "📤 Sending started...")
 
         job_id = job["job_id"]
         group_id = job["group_id"]
@@ -1016,7 +1013,7 @@ def queue_worker():
                             media_list.append(
                                 telebot.types.InputMediaVideo(file_id, caption=caption)
                             )
-                    
+
                     bot.send_media_group(group_id, media_list)
                     last_id = items[-1][0]
                     sent += len(items)
