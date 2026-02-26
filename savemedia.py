@@ -956,7 +956,10 @@ def start_worker():
 
     worker_running = True
     threading.Thread(target=queue_worker).start()
-
+def build_progress_bar(percent, length=20):
+    filled = int(length * percent / 100)
+    empty = length - filled
+    return "█" * filled + "░" * empty
 
 def queue_worker():
     global worker_running
@@ -1043,20 +1046,31 @@ def queue_worker():
                         avg_time = elapsed / sent
                         remaining = total - sent
                         eta_seconds = int(avg_time * remaining)
+                        speed = round(sent / elapsed, 2)
                     else:
                         eta_seconds = 0
+                        speed = 0
 
                     minutes = eta_seconds // 60
                     seconds = eta_seconds % 60
 
                     eta_text = f"{minutes}m {seconds}s" if eta_seconds > 0 else "calculating..."
 
+                    bar = build_progress_bar(percent)
+
+                    progress_text = (
+                        "📦 Sending Media\n\n"
+                        f"[{bar}] {percent}%\n\n"
+                        f"📊 {sent} / {total} files\n"
+                        f"⚡ Speed: {speed} files/sec\n"
+                        f"⏳ ETA: {eta_text}"
+                    )
+
                     bot.edit_message_text(
-                        f"📤 {percent}% | {sent}/{total} files\n⏳ ETA: {eta_text}",
+                        progress_text,
                         chat_id,
                         progress_message.message_id
                     )
-
                 time.sleep(delay)
 
                 # Update resume position
@@ -1074,8 +1088,13 @@ def queue_worker():
             except Exception as e:
                 print("Queue send error:", e)
                 time.sleep(2)
+        # ===== FINAL COMPLETION MESSAGE =====
+        total_time = round(time.time() - start_time, 2)
+
         bot.edit_message_text(
-            f"✅ Completed\n{total}/{total} files sent",
+            "✅ Job Completed\n\n"
+            f"📊 {total}/{total} files sent\n"
+            f"⏱ Total time: {total_time} sec",
             chat_id,
             progress_message.message_id
         )
