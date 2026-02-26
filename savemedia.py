@@ -69,7 +69,15 @@ def init_db():
     cur.execute("""
         ALTER TABLE send_jobs
         ADD COLUMN IF NOT EXISTS status TEXT DEFAULT 'running'
-    """)   
+    """)  
+    cur.execute("""
+        CREATE TABLE IF NOT EXISTS user_send_groups (
+            id SERIAL PRIMARY KEY,
+            target_user BIGINT,
+            group_id BIGINT,
+            UNIQUE(target_user, group_id)
+        );
+    """) 
     cur.execute("CREATE INDEX IF NOT EXISTS idx_user_media ON stored_media(user_id);")
     cur.execute("CREATE INDEX IF NOT EXISTS idx_saved_at ON stored_media(saved_at);")
 
@@ -195,7 +203,10 @@ def get_category_counts(user_id):
 def dashboard_text(user_id):
     total_files = get_total_files(user_id)
     total_size = format_size(get_storage_used(user_id))
-    return f"📦 Cloud Vault\n\n📊 Your Storage:\n• Total Files: {total_files}\n• Total Size: {total_size}\n\nChoose an option:"
+    if total_files == 0:
+        return "Welcome to Rock Cloud Vault!\n\n📦 Your storage is empty.\nStart by sending any media file to save it here."
+    else:
+        return f"Wellcome To Rock Cloud Vault\n\n📦 Your Storage:\n•📄 Total Files: {total_files}\n•💾 Total Size: {total_size}\n\nChoose an option:"
 
 def dashboard_markup(user_id):
     markup = InlineKeyboardMarkup()
@@ -775,9 +786,61 @@ def callback_handler(call):
 
         admin_send_state[call.from_user.id]["speed"] = selected_speed
 
+        target_user = admin_send_state[call.from_user.id]["target_user"]
+
+        conn = get_connection()
+        cur = conn.cursor()
+        cur.execute("""
+            SELECT group_id FROM user_send_groups
+            WHERE target_user = %s
+            ORDER BY id DESC
+            LIMIT 5
+        """, (target_user,))
+        groups = cur.fetchall()
+        cur.close()
+        conn.close()
+
+        markup = InlineKeyboardMarkup()
+
+        # Add previous groups as buttons
+        for g in groups:
+            markup.add(
+                InlineKeyboardButton(
+                    f"📂 {g[0]}",
+                    callback_data=f"use_group_{g[0]}"
+                )
+            )
+
+        # Add manual entry option
+        markup.add(
+            InlineKeyboardButton("➕ Use New Group", callback_data="enter_new_group")
+        )
+
         bot.send_message(
             call.message.chat.id,
-            "📩 Now forward ANY message from target group\nOR send group ID."
+            "📤 Select a previous group or add new one:",
+            reply_markup=markup
+        )
+    elif data.startswith("use_group_"):
+
+        group_id = int(data.split("_")[-1])
+
+        if call.from_user.id not in admin_send_state:
+            return
+
+        admin_send_state[call.from_user.id]["group_id"] = group_id
+
+        bot.send_message(
+            call.message.chat.id,
+            f"✅ Selected group: {group_id}\n\nPress confirm to start."
+        )
+
+
+    elif data == "enter_new_group":
+
+        bot.send_message(
+            call.message.chat.id,
+            "📩 Forward ANY message from target group\nOR send group ID."
         )
     elif data == "admin_confirm_send":
 
@@ -813,7 +876,17 @@ def callback_handler(call):
             VALUES (%s,%s,%s)
             RETURNING id
         """, (call.from_user.id, user_id, group_id))
-
+        # Save group history for this user
+        conn = get_connection()
+        cur = conn.cursor()
+        cur.execute("""
+            INSERT INTO user_send_groups (target_user, group_id)
+            VALUES (%s, %s)
+            ON CONFLICT (target_user, group_id) DO NOTHING
+        """, (user_id, group_id))
+        conn.commit()
+        cur.close()
+        conn.close()
         job_id = cur.fetchone()[0]
         with job_status_lock:
             job_status_cache[job_id] = "running"
@@ -899,6 +972,7 @@ def callback_handler(call):
             job_status_cache[job_id] = "running"
 
         bot.answer_callback_query(call.id, "▶ Job resumed")
+    
     elif data.startswith("cat_"):
         _, file_type, page = data.split("_")
         page = int(page)
