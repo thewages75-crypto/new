@@ -941,7 +941,7 @@ def callback_handler(call):
             WHERE user_id=%s
             ORDER BY id ASC
         """, (user_id,))
-        rows = cur.fetchall()
+        rows = cur.fetchmany(500)
 
         # Create job
         cur.execute("""
@@ -1212,21 +1212,33 @@ def build_progress_bar(percent, length=20):
 
 def queue_worker():
     global worker_running
+
     while True:
         try:
             job = job_queue.get(timeout=1)
         except:
             break
 
-        total = job["total"]
-        chat_id = job["chat_id"]
         job_id = job["job_id"]
-        group_id = job["group_id"]
-        rows = job["rows"]
+        target_user = job["target_user"]
         delay = job.get("speed", 1)
+        chat_id = job["chat_id"]
 
-        start_time = time.time()
-        progress_message = bot.send_message(chat_id, "📤 Sending started...")
+        with job_status_lock:
+            job_status_cache[job_id] = "running"
+
+        # Get total count once
+        conn = get_connection()
+        cur = conn.cursor()
+        cur.execute("""
+            SELECT COUNT(*) FROM stored_media
+            WHERE user_id = %s
+        """, (target_user,))
+        total = cur.fetchone()[0]
+        cur.close()
+        conn.close()
+
+        progress_message = bot.send_message(chat_id, "📦 Sending started...")
         live_jobs[job_id] = {
             "sent": 0,
             "total": total,
@@ -1235,62 +1247,43 @@ def queue_worker():
             "message_id": progress_message.message_id,
             "chat_id": chat_id
         }
+
+        last_sent_id = 0
         sent = 0
-        grouped = {}
+        BATCH_SIZE = 200
 
-        # Group media
-        for media_id, file_id, file_type, caption, media_group_id in rows:
-            if media_group_id:
-                grouped.setdefault(media_group_id, []).append(
-                    (media_id, file_id, file_type, caption)
-                )
-            else:
-                grouped[f"single_{media_id}"] = [
-                    (media_id, file_id, file_type, caption)
-                ]
+        while True:
 
-        for group_key, items in grouped.items():
-
-            # Wait if paused
+            # Pause handling
             while job_status_cache[job_id] == "paused":
                 time.sleep(1)
 
-            # Always get latest group
-            current_group_id = live_jobs[job_id]["group_id"]
+            # Fetch next batch
+            conn = get_connection()
+            cur = conn.cursor()
+            cur.execute("""
+                SELECT id, file_id, file_type, caption
+                FROM stored_media
+                WHERE user_id=%s AND id > %s
+                ORDER BY id ASC
+                LIMIT %s
+            """, (target_user, last_sent_id, BATCH_SIZE))
 
-            try:
-                # =====================
-                # ALBUM
-                # =====================
-                if len(items) > 1 and all(i[2] in ["photo", "video"] for i in items):
+            rows = cur.fetchall()
+            cur.close()
+            conn.close()
 
-                    media_list = []
+            if not rows:
+                break  # finished
 
-                    for index, (media_id, file_id, file_type, caption) in enumerate(items):
+            for media_id, file_id, file_type, caption in rows:
 
-                        if file_type == "photo":
-                            if index == 0:
-                                media_list.append(InputMediaPhoto(file_id, caption=caption))
-                            else:
-                                media_list.append(InputMediaPhoto(file_id))
+                while job_status_cache[job_id] == "paused":
+                    time.sleep(1)
 
-                        elif file_type == "video":
-                            if index == 0:
-                                media_list.append(InputMediaVideo(file_id, caption=caption))
-                            else:
-                                media_list.append(InputMediaVideo(file_id))
+                current_group_id = live_jobs[job_id]["group_id"]
 
-                    bot.send_media_group(current_group_id, media_list)
-
-                    sent += len(items)
-                    last_id = items[-1][0]  # ✅ correct last_id for album
-
-                # =====================
-                # SINGLE
-                # =====================
-                else:
-                    media_id, file_id, file_type, caption = items[0]
-
+                try:
                     if file_type == "photo":
                         bot.send_photo(current_group_id, file_id, caption=caption)
                     elif file_type == "video":
@@ -1301,68 +1294,64 @@ def queue_worker():
                         bot.send_audio(current_group_id, file_id, caption=caption)
 
                     sent += 1
-                    last_id = media_id  # ✅ correct last_id for single
+                    last_sent_id = media_id
+                    live_jobs[job_id]["sent"] = sent
 
-                live_jobs[job_id]["sent"] = sent
+                    # Update resume position
+                    conn = get_connection()
+                    cur = conn.cursor()
+                    cur.execute("""
+                        UPDATE send_jobs
+                        SET last_sent_id = %s
+                        WHERE id = %s
+                    """, (last_sent_id, job_id))
+                    conn.commit()
+                    cur.close()
+                    conn.close()
 
-                # =====================
-                # PROGRESS UPDATE
-                # =====================
-                if sent % 5 == 0 or sent == total:
+                    # Update progress every 10 files
+                    if sent % 10 == 0 or sent == total:
+                        percent = int((sent / total) * 100)
+                        bar = build_progress_bar(percent)
 
-                    percent = int((sent / total) * 100)
-                    elapsed = time.time() - start_time
+                        try:
+                            bot.edit_message_text(
+                                f"📦 Sending Media\n\n"
+                                f"[{bar}] {percent}%\n\n"
+                                f"{sent} / {total} files sent",
+                                chat_id,
+                                live_jobs[job_id]["message_id"]
+                            )
+                        except:
+                            new_msg = bot.send_message(
+                                chat_id,
+                                f"{sent}/{total} files sent..."
+                            )
+                            live_jobs[job_id]["message_id"] = new_msg.message_id
 
-                    if sent > 0:
-                        avg_time = elapsed / sent
-                        remaining = total - sent
-                        eta_seconds = int(avg_time * remaining)
-                        speed = round(sent / elapsed, 2)
+                    time.sleep(delay)
+
+                except telebot.apihelper.ApiTelegramException as e:
+                    if e.error_code == 429:
+                        retry = int(e.result_json["parameters"]["retry_after"])
+                        time.sleep(retry)
                     else:
-                        eta_seconds = 0
-                        speed = 0
+                        print("Send error:", e)
+                        time.sleep(2)
 
-                    minutes = eta_seconds // 60
-                    seconds = eta_seconds % 60
-                    eta_text = f"{minutes}m {seconds}s" if eta_seconds > 0 else "calculating..."
+        # Finished
+        try:
+            bot.edit_message_text(
+                f"✅ Sending completed.\n\n{sent} files sent successfully.",
+                chat_id,
+                live_jobs[job_id]["message_id"]
+            )
+        except:
+            bot.send_message(chat_id, "✅ Sending completed.")
 
-                    bar = build_progress_bar(percent)
+        job_queue.task_done()
 
-                    progress_text = (
-                        " Sending Media ⌯⌲\n\n"
-                        f"[{bar}] {percent}%\n\n"
-                        f"📊 {sent} / {total} files\n"
-                        f"⚡ Speed: {speed} files/sec\n"
-                        f"⏳ ETA: {eta_text}"
-                    )
-
-                    bot.edit_message_text(
-                        progress_text,
-                        chat_id,
-                        progress_message.message_id
-                    )
-
-                # =====================
-                # UPDATE RESUME POSITION
-                # =====================
-                conn = get_connection()
-                cur = conn.cursor()
-                cur.execute("""
-                    UPDATE send_jobs
-                    SET last_sent_id = %s
-                    WHERE id = %s
-                """, (last_id, job_id))
-                conn.commit()
-                cur.close()
-                conn.close()
-
-                time.sleep(delay)
-
-            except Exception as e:
-                print("Queue send error:", e)
-                live_jobs[job_id]["sent"] = sent
-                time.sleep(2)
-        worker_running = False
+    worker_running = False
         # reuse your sender logic here
 # ================= START BOT ================= #
 
