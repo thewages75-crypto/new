@@ -361,9 +361,9 @@ def handle_media(message):
             album_timers[media_group_id].cancel()
 
         # wait for album complete
-        def finalize_album():
-
-            items = album_buffer.pop(media_group_id, [])
+        def finalize_album(mgid=media_group_id):
+            # itams = album_buffer.pop(mgid, [])
+            items = album_buffer.pop(mgid, [])
             if not items:
                 return
 
@@ -406,6 +406,7 @@ def handle_media(message):
                     args=(user_id, chat_id)
                 )
                 user_timers[user_id] = t
+                
                 t.start()
 
     else:
@@ -440,6 +441,8 @@ def handle_media(message):
                 args=(user_id, message.chat.id)
             )
             user_timers[user_id] = t
+            t = threading.Timer(1.2, finalize_album)
+            album_timers[media_group_id] = t
             t.start()
         
 # ================= CATEGORY MENU ================= #
