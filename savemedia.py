@@ -616,7 +616,7 @@ def callback_handler(call):
         conn = get_connection()
         cur = conn.cursor()
         cur.execute("""
-            SELECT id, file_id, file_type, caption
+            SELECT id, file_id, file_type, caption, media_group_id
             FROM stored_media
             WHERE user_id=%s
             ORDER BY id ASC
@@ -645,13 +645,36 @@ def callback_handler(call):
         )
 
         # BACKGROUND THREAD
+        from telebot.types import InputMediaPhoto, InputMediaVideo, InputMediaDocument, InputMediaAudio
+
         def sender():
 
             sent = 0
+            grouped = {}
 
-            for media_id, file_id, file_type, caption in rows:
+            # =========================
+            # GROUP BY media_group_id
+            # =========================
+            for media_id, file_id, file_type, caption, media_group_id in rows:
 
-                # cancel check
+                if media_group_id:
+                    if media_group_id not in grouped:
+                        grouped[media_group_id] = []
+
+                    grouped[media_group_id].append(
+                        (file_id, file_type, caption)
+                    )
+                else:
+                    # single media use its own id
+                    grouped[f"single_{media_id}"] = [
+                        (file_id, file_type, caption)
+                    ]
+
+            # =========================
+            # SEND LOGIC
+            # =========================
+            for group_key, items in grouped.items():
+
                 if admin_active_jobs[call.from_user.id]["cancel"]:
                     bot.send_message(call.message.chat.id, "🛑 Sending cancelled")
                     admin_active_jobs.pop(call.from_user.id, None)
@@ -659,39 +682,65 @@ def callback_handler(call):
 
                 try:
 
-                    if file_type == "photo":
-                        bot.send_photo(group_id, file_id, caption=caption)
+                    # ---------- ALBUM ----------
+                    if len(items) > 1:
 
-                    elif file_type == "video":
-                        bot.send_video(group_id, file_id, caption=caption)
+                        media_list = []
 
-                    elif file_type == "document":
-                        bot.send_document(group_id, file_id, caption=caption)
+                        for file_id, file_type, caption in items:
 
-                    elif file_type == "audio":
-                        bot.send_audio(group_id, file_id, caption=caption)
+                            if file_type == "photo":
+                                media_list.append(InputMediaPhoto(file_id, caption=caption))
 
-                    sent += 1
+                            elif file_type == "video":
+                                media_list.append(InputMediaVideo(file_id, caption=caption))
 
-                    # progress update every 10 files
+                            elif file_type == "document":
+                                media_list.append(InputMediaDocument(file_id, caption=caption))
+
+                            elif file_type == "audio":
+                                media_list.append(InputMediaAudio(file_id, caption=caption))
+
+                        bot.send_media_group(group_id, media_list)
+
+                        sent += len(items)
+
+                    # ---------- SINGLE ----------
+                    else:
+
+                        file_id, file_type, caption = items[0]
+
+                        if file_type == "photo":
+                            bot.send_photo(group_id, file_id, caption=caption)
+
+                        elif file_type == "video":
+                            bot.send_video(group_id, file_id, caption=caption)
+
+                        elif file_type == "document":
+                            bot.send_document(group_id, file_id, caption=caption)
+
+                        elif file_type == "audio":
+                            bot.send_audio(group_id, file_id, caption=caption)
+
+                        sent += 1
+
+                    # progress every 10 files
                     if sent % 10 == 0:
                         bot.send_message(
                             call.message.chat.id,
                             f"📤 Progress: {sent}/{total}"
                         )
 
-                    # anti flood delay
-                    time.sleep(0.05)
+                    time.sleep(1)  # 1 second delay (safe)
 
                 except Exception as e:
                     print("Send error:", e)
-                    time.sleep(1)
+                    time.sleep(2)
 
             bot.send_message(call.message.chat.id, "✅ All media sent")
 
             admin_active_jobs.pop(call.from_user.id, None)
             admin_send_state.pop(call.from_user.id, None)
-
         threading.Thread(target=sender).start()
 
         admin_send_state.pop(call.from_user.id, None)
