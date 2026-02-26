@@ -1,13 +1,11 @@
 import telebot
 from telebot.types import InlineKeyboardMarkup, InlineKeyboardButton
-from telebot.types import InputMediaPhoto, InputMediaVideo, InputMediaDocument, InputMediaAudio
 import psycopg2
 from datetime import datetime
 import os
 import threading
 import time
 from queue import Queue
-
 # ================= CONFIG ================= #
 
 BOT_TOKEN = "8606303101:AAGw3fHdI5jpZOOuFCSoHlPKb1Urj4Oidk4"
@@ -82,10 +80,6 @@ def init_db():
             UNIQUE(target_user, group_id)
         );
     """) 
-    cur.execute("""
-        ALTER TABLE user_send_groups
-        ADD COLUMN IF NOT EXISTS group_title TEXT;
-    """)
     cur.execute("CREATE INDEX IF NOT EXISTS idx_user_media ON stored_media(user_id);")
     cur.execute("CREATE INDEX IF NOT EXISTS idx_saved_at ON stored_media(saved_at);")
 
@@ -235,42 +229,6 @@ def start(message):
     )
 @bot.message_handler(func=lambda m: m.from_user.id == ADMIN_ID and m.from_user.id in admin_send_state)
 def admin_group_input(message):
-    
-    if message.from_user.id in admin_send_state and "changing_job" in admin_send_state[message.from_user.id]:
-
-        job_id = admin_send_state[message.from_user.id]["changing_job"]
-
-        if message.forward_from_chat:
-            group_id = message.forward_from_chat.id
-            group_title = message.forward_from_chat.title
-        else:
-            group_id = int(message.text)
-            chat = bot.get_chat(group_id)
-            group_title = chat.title
-
-        # Update live job
-        live_jobs[job_id]["group_id"] = group_id
-        live_jobs[job_id]["group_title"] = group_title
-
-        # Update DB
-        conn = get_connection()
-        cur = conn.cursor()
-        cur.execute("""
-            UPDATE send_jobs
-            SET group_id = %s
-            WHERE id = %s
-        """, (group_id, job_id))
-        conn.commit()
-        cur.close()
-        conn.close()
-
-        bot.send_message(
-            message.chat.id,
-            f"✅ Group changed to: {group_title}\nPress Resume to continue."
-        )
-
-        del admin_send_state[message.from_user.id]["changing_job"]
-        return
 
     if message.from_user.id not in admin_send_state:
         return
@@ -331,8 +289,6 @@ def finalize_user_upload(user_id, chat_id):
             f"✅ Saved: {session['saved']}\n"
             f"♻️ Skipped (Duplicates): {session['duplicate']}\n\n"
             f"📦 Total Files: {total_files}\n"
-            f"📦 Total Files: {total_files}\n"
-            f"🎬 Total Video Files: {session['video']} \n"
             f"💾 Total Size: {total_size}"
         )
     else:
@@ -341,8 +297,6 @@ def finalize_user_upload(user_id, chat_id):
             f"Total Sent: {session['total']}\n"
             f"✅ Saved: {session['saved']}\n\n"
             f"📦 Total Files: {total_files}\n"
-            f"🎬 Total Video Files: {session['video']} \n"
-            f"🖼️ Total Photo Files: {session['photo']} \n"
             f"💾 Total Size: {total_size}"
         )
 
@@ -423,12 +377,9 @@ def handle_media(message):
                 result = save_media(u_id, file_id, file_type, caption, file_size, mgid)
 
                 if result:
-                    # saved_count += 1
-                    user_sessions[user_id]["saved"] += 1
-                    user_sessions[user_id][file_type] += 1
+                    saved_count += 1
                 else:
-                    # duplicate_count += 1
-                    user_sessions[user_id]["duplicate"] += 1
+                    duplicate_count += 1
 
             with session_lock:
                 if user_id not in user_sessions:
@@ -437,10 +388,6 @@ def handle_media(message):
                         "total": 0,
                         "saved": 0,
                         "duplicate": 0,
-                        "photo": 0,
-                        "video": 0,
-                        "document": 0,
-                        "audio": 0,
                         "message_id": msg.message_id
                     }
 
@@ -470,36 +417,34 @@ def handle_media(message):
 
         with session_lock:
             if user_id not in user_sessions:
-                msg = bot.send_message(chat_id, "📥 Saving files...")
+                msg = bot.send_message(message.chat.id, "📥 Saving files...")
                 user_sessions[user_id] = {
                     "total": 0,
                     "saved": 0,
                     "duplicate": 0,
-                    "photo": 0,
-                    "video": 0,
-                    "document": 0,
-                    "audio": 0,
                     "message_id": msg.message_id
                 }
+
             user_sessions[user_id]["total"] += 1
 
             if is_saved:
                 user_sessions[user_id]["saved"] += 1
-                user_sessions[user_id][file_type] += 1
             else:
                 user_sessions[user_id]["duplicate"] += 1
 
             # reset timer
             if user_id in user_timers:
                 user_timers[user_id].cancel()
+
             t = threading.Timer(
                 2.0,
                 finalize_user_upload,
                 args=(user_id, message.chat.id)
             )
             user_timers[user_id] = t
+            t = threading.Timer(1.2, finalize_album)
+            album_timers[media_group_id] = t
             t.start()
-
         
 # ================= CATEGORY MENU ================= #
 
@@ -927,12 +872,6 @@ def callback_handler(call):
         user_id = state["target_user"]
         group_id = state.get("group_id")
         speed = state.get("speed", 1)
-        # fetch title safely
-        try:
-            chat = bot.get_chat(group_id)
-            group_title = chat.title
-        except:
-            group_title = str(group_id)
 
         if not group_id:
             bot.answer_callback_query(call.id, "Send group first")
@@ -1017,47 +956,26 @@ def callback_handler(call):
             job_status_cache[job_id] = "paused"
 
         job = live_jobs.get(job_id)
-        if not job:
-            return
 
-        sent = job["sent"]
-        total = job["total"]
-        group_title = job["group_title"]
-        chat_id = job["chat_id"]
-        message_id = job["message_id"]
+        if job:
+            sent = job["sent"]
+            total = job["total"]
+            group_title = job["group_title"]
+            chat_id = job["chat_id"]
+            message_id = job["message_id"]
 
-        percent = int((sent / total) * 100) if total else 0
-        bar = build_progress_bar(percent)
+            percent = int((sent / total) * 100) if total else 0
+            bar = build_progress_bar(percent)
 
-        markup = InlineKeyboardMarkup()
-        markup.add(
-            InlineKeyboardButton("🔁 Change Group", callback_data=f"change_group_{job_id}"),
-            InlineKeyboardButton("▶ Resume", callback_data=f"resume_job_{job_id}")
-        )
+            text = (
+                f"⏸ Sending to: {group_title} (Paused)\n\n"
+                f"[{bar}] {percent}%\n\n"
+                f"📊 {sent} / {total} files sent"
+            )
 
-        text = (
-            f"⏸ Sending to: {group_title} (Paused)\n\n"
-            f"[{bar}] {percent}%\n\n"
-            f"📊 {sent} / {total} files sent"
-        )
+            bot.edit_message_text(text, chat_id, message_id)
 
-        bot.edit_message_text(text, chat_id, message_id, reply_markup=markup)
-    elif data.startswith("change_group_"):
-
-        job_id = int(data.split("_")[-1])
-
-        if job_id not in live_jobs:
-            bot.answer_callback_query(call.id, "Job not found")
-            return
-
-        admin_send_state[call.from_user.id] = {
-            "changing_job": job_id
-        }
-
-        bot.send_message(
-            call.message.chat.id,
-            "📩 Forward ANY message from new group\nOR send new group ID."
-        )
+        bot.answer_callback_query(call.id, "Paused")
     elif data.startswith("resume_job_"):
 
         job_id = int(data.split("_")[-1])
@@ -1233,7 +1151,6 @@ def queue_worker():
         live_jobs[job_id] = {
             "sent": 0,
             "total": total,
-            "group_id": job["group_id"],
             "group_title": job["group_title"],
             "message_id": progress_message.message_id,
             "chat_id": chat_id
@@ -1252,61 +1169,55 @@ def queue_worker():
                     (media_id, file_id, file_type, caption)
                 ]
 
-        for group_key, items in grouped.items():
+        for items in grouped.values():
 
-            # Wait if paused
-            while job_status_cache[job_id] == "paused":
-                time.sleep(1)
+            # Wait if paused (memory check only)
+            while True:
+                with job_status_lock:
+                    status = job_status_cache.get(job_id, "running")
 
-            # Always get latest group
-            current_group_id = live_jobs[job_id]["group_id"]
+                if status == "paused":
+                    time.sleep(1)
+                else:
+                    break
 
             try:
-                # =====================
-                # ALBUM
-                # =====================
-                if len(items) > 1:
 
+                if len(items) > 1:
                     media_list = []
 
                     for media_id, file_id, file_type, caption in items:
                         if file_type == "photo":
-                            media_list.append(InputMediaPhoto(file_id, caption=caption))
+                            media_list.append(
+                                telebot.types.InputMediaPhoto(file_id, caption=caption)
+                            )
                         elif file_type == "video":
-                            media_list.append(InputMediaVideo(file_id, caption=caption))
-                        elif file_type == "document":
-                            media_list.append(InputMediaDocument(file_id, caption=caption))
-                        elif file_type == "audio":
-                            media_list.append(InputMediaAudio(file_id, caption=caption))
+                            media_list.append(
+                                telebot.types.InputMediaVideo(file_id, caption=caption)
+                            )
 
-                    bot.send_media_group(current_group_id, media_list)
-
+                    bot.send_media_group(group_id, media_list)
+                    last_id = items[-1][0]
                     sent += len(items)
-                    last_id = items[-1][0]  # ✅ correct last_id for album
+                    live_jobs[job_id]["sent"] = sent
 
-                # =====================
-                # SINGLE
-                # =====================
                 else:
                     media_id, file_id, file_type, caption = items[0]
 
                     if file_type == "photo":
-                        bot.send_photo(current_group_id, file_id, caption=caption)
+                        bot.send_photo(group_id, file_id, caption=caption)
                     elif file_type == "video":
-                        bot.send_video(current_group_id, file_id, caption=caption)
+                        bot.send_video(group_id, file_id, caption=caption)
                     elif file_type == "document":
-                        bot.send_document(current_group_id, file_id, caption=caption)
+                        bot.send_document(group_id, file_id, caption=caption)
                     elif file_type == "audio":
-                        bot.send_audio(current_group_id, file_id, caption=caption)
+                        bot.send_audio(group_id, file_id, caption=caption)
 
+                    last_id = media_id
                     sent += 1
-                    last_id = media_id  # ✅ correct last_id for single
+                    live_jobs[job_id]["sent"] = sent
 
-                live_jobs[job_id]["sent"] = sent
-
-                # =====================
-                # PROGRESS UPDATE
-                # =====================
+                # ===== PROGRESS UPDATE (WORKS FOR BOTH SINGLE + ALBUM) =====
                 if sent % 5 == 0 or sent == total:
 
                     percent = int((sent / total) * 100)
@@ -1323,6 +1234,7 @@ def queue_worker():
 
                     minutes = eta_seconds // 60
                     seconds = eta_seconds % 60
+
                     eta_text = f"{minutes}m {seconds}s" if eta_seconds > 0 else "calculating..."
 
                     bar = build_progress_bar(percent)
@@ -1340,10 +1252,9 @@ def queue_worker():
                         chat_id,
                         progress_message.message_id
                     )
+                time.sleep(delay)
 
-                # =====================
-                # UPDATE RESUME POSITION
-                # =====================
+                # Update resume position
                 conn = get_connection()
                 cur = conn.cursor()
                 cur.execute("""
@@ -1355,11 +1266,37 @@ def queue_worker():
                 cur.close()
                 conn.close()
 
-                time.sleep(delay)
-
             except Exception as e:
                 print("Queue send error:", e)
                 time.sleep(2)
+        # ===== FINAL COMPLETION MESSAGE =====
+        total_time = round(time.time() - start_time, 2)
+
+        bot.edit_message_text(
+            "✅ Job Completed\n\n"
+            f"📊 {total}/{total} files sent\n"
+            f"⏱ Total time: {total_time} sec",
+            chat_id,
+            progress_message.message_id
+        )
+        # Mark job complete
+        conn = get_connection()
+        cur = conn.cursor()
+        cur.execute("""
+            UPDATE send_jobs
+            SET is_active = FALSE
+            WHERE id = %s
+        """, (job_id,))
+        conn.commit()
+        cur.close()
+        conn.close()
+        live_jobs.pop(job_id, None)
+        with job_status_lock:
+            job_status_cache.pop(job_id, None)
+    
+    
+    worker_running = False
+
         # reuse your sender logic here
 # ================= START BOT ================= #
 
