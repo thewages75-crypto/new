@@ -818,7 +818,7 @@ def callback_handler(call):
             InlineKeyboardButton("🐢 Ultra Safe", callback_data="speed_ultra")
         )
 
-        bot.edit_send_message(
+        bot.edit_message_text(
             "⚙ Select sending speed:",
             call.message.chat.id,
             call.message.message_id,
