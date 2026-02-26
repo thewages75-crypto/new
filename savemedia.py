@@ -1329,7 +1329,7 @@ def queue_worker():
                     bar = build_progress_bar(percent)
 
                     progress_text = (
-                        "📦 Sending Media\n\n"
+                        " Sending Media ⌯⌲\n\n"
                         f"[{bar}] {percent}%\n\n"
                         f"📊 {sent} / {total} files\n"
                         f"⚡ Speed: {speed} files/sec\n"
