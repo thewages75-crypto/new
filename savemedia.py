@@ -1225,7 +1225,7 @@ def queue_worker():
         try:
             job = job_queue.get(timeout=1)
         except:
-            break
+            continue
 
         total = job["total"]
         chat_id = job["chat_id"]
@@ -1260,7 +1260,7 @@ def queue_worker():
         last_id = cur.fetchone()[0] or 0
         cur.close()
         conn.close()
-        batch_size = 500
+        batch_size = 2000
 
         while True:
 
@@ -1305,7 +1305,6 @@ def queue_worker():
                 # (use your try/except block here)
 
                 # IMPORTANT:
-                last_id = items[-1][0]
                 try:    
                     # =====================
                     # ALBUM
@@ -1482,6 +1481,17 @@ def queue_worker():
                     print("Unexpected error:", e)
                     time.sleep(2)
                     continue
+        # Mark job completed
+        conn = get_connection()
+        cur = conn.cursor()
+        cur.execute("""
+            UPDATE send_jobs
+            SET is_active = FALSE
+            WHERE id = %s
+        """, (job_id,))
+        conn.commit()
+        cur.close()
+        conn.close()
         job_queue.task_done()
     worker_running = False
         # reuse your sender logic here
