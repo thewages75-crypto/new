@@ -874,7 +874,7 @@ def callback_handler(call):
 
         bot.send_message(
             call.message.chat.id,
-            "📤 Select a previous group or add new one:",
+            "📤 SELECT A GROUP OR ADD A NEW ONE:",
             reply_markup=markup
         )
     elif data.startswith("use_group_"):
@@ -897,7 +897,7 @@ def callback_handler(call):
 
         bot.send_message(
             call.message.chat.id,
-            f"✅ Group selected: `{group_id}`\n\nPress the button below to start sending.",
+            f"✅ Group selected: `{g_title}`\n\nPress the button below to start sending.",
             parse_mode="Markdown",
             reply_markup=markup
         )
@@ -992,7 +992,7 @@ def callback_handler(call):
 
         bot.send_message(
             call.message.chat.id,
-            f"🚀 Sending started\nTotal files: {total_files}",
+            f"🚀 Sending Started\nFrom User: {username} To Group: {g_title}\nTotal files: {total_files}",
             reply_markup=markup
         )
 
@@ -1458,31 +1458,21 @@ def queue_worker():
 
                         rate_limit_hits += 1
 
-                        if rate_limit_hits == 1:
-                            bot.send_message(
-                                current_group_id,
-                                f"⚠ Telegram rate limit detected!\n"
-                                f"📉 Slowing down sending speed.\n"
-                                f"⏳ Sleeping for {retry_after} seconds..."
-                            )
-
                         # Increase delay dynamically
-                        extra_delay += 0.2  # add 0.2 sec more per hit
+                        extra_delay += 0.2
                         delay = base_delay + extra_delay
 
                         # Increase future pause duration
-                        extra_pause_extension += 120  # add +2 min to next smart break
+                        extra_pause_extension += 120
 
-                        # bot.send_message(
-                        #     current_group_id,
-                        #     f"⚠ Telegram rate limit detected!\n"
-                        #     f"📉 Slowing down sending speed.\n"
-                        #     f"⏳ Sleeping for {retry_after} seconds..."
-                        # )
-
+                        # IMPORTANT: DO NOT SEND ANY MESSAGE HERE
+                        # Respect Telegram first
                         time.sleep(retry_after)
-                        continue
 
+                        # Optional: log only to console
+                        print(f"Rate limited. Slept {retry_after}s. New delay: {delay}")
+
+                        continue
                     else:
                         print("Telegram API error:", e)
                         time.sleep(2)
