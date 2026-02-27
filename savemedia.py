@@ -12,6 +12,8 @@ from datetime import datetime
 
 BOT_TOKEN = "8606303101:AAGw3fHdI5jpZOOuFCSoHlPKb1Urj4Oidk4"
 # DATABASE_URL = "YOUR_RAILWAY_POSTGRES_URL"
+DATABASE_URL = os.getenv("DATABASE_URL")
+
 ADMIN_ID = 8305774350  # replace with your Telegram ID
 
 bot = telebot.TeleBot(BOT_TOKEN, parse_mode="HTML")
