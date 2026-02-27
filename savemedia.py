@@ -910,7 +910,6 @@ def callback_handler(call):
             "📩 Forward ANY message from target group\nOR send group ID."
         )
     elif data == "admin_confirm_send":
-
         if call.from_user.id not in admin_send_state:
             bot.answer_callback_query(call.id, "Session expired")
             return
@@ -920,6 +919,17 @@ def callback_handler(call):
         user_id = state["target_user"]
         group_id = state.get("group_id")
         speed = state.get("speed", 1)
+        # Get username safely
+        username = "Unknown"
+
+        conn = get_connection()
+        cur = conn.cursor()
+        cur.execute("SELECT username FROM users WHERE id = %s", (user_id,))
+        row = cur.fetchone()
+        if row and row[0]:
+            username = row[0]
+        cur.close()
+        conn.close()
         # fetch title safely
         try:
             chat = bot.get_chat(group_id)
@@ -992,7 +1002,7 @@ def callback_handler(call):
 
         bot.send_message(
             call.message.chat.id,
-            f"🚀 Sending Started\nFrom User: {username} To Group: {g_title}\nTotal files: {total_files}",
+            f"🚀 Sending Started\nFrom User: {username} To Group: {group_title}\nTotal files: {total_files}",
             reply_markup=markup
         )
 
