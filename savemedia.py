@@ -924,7 +924,7 @@ def callback_handler(call):
 
         conn = get_connection()
         cur = conn.cursor()
-        cur.execute("SELECT username FROM users WHERE id = %s", (user_id,))
+        cur.execute("SELECT username FROM users WHERE user_id = %s", (user_id,))
         row = cur.fetchone()
         if row and row[0]:
             username = row[0]
