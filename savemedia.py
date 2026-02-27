@@ -897,7 +897,7 @@ def callback_handler(call):
 
         bot.send_message(
             call.message.chat.id,
-            f"✅ Group selected: `{g_title}`\n\nPress the button below to start sending.",
+            f"✅ Group selected: `{group_title}`\n\nPress the button below to start sending.",
             parse_mode="Markdown",
             reply_markup=markup
         )
