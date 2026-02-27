@@ -920,6 +920,13 @@ def callback_handler(call):
 
         admin_send_state[call.from_user.id]["group_id"] = group_id
 
+        # ✅ Fetch group title safely
+        try:
+            chat = bot.get_chat(group_id)
+            group_title = chat.title
+        except:
+            group_title = str(group_id)
+
         markup = InlineKeyboardMarkup()
         markup.add(
             InlineKeyboardButton(
@@ -934,7 +941,6 @@ def callback_handler(call):
             parse_mode="Markdown",
             reply_markup=markup
         )
-
 
     elif data == "enter_new_group":
 
