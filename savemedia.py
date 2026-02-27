@@ -327,21 +327,21 @@ def finalize_user_upload(user_id, chat_id):
 
     if session["duplicate"] > 0:
         text = (
-            f"📦 Upload Completed\n\n"
+            f"⚔️ Upload Completed 🕷\n\n"
             f"Total Sent: {session['total']}\n"
             f"✅ Saved: {session['saved']}\n"
             f"♻️ Skipped (Duplicates): {session['duplicate']}\n\n"
-            f"📦 Total Files: {total_files}\n"
-            f"📦 Total Files: {total_files}\n"
+            f"🗃️ Total Files: {total_files}\n"
+            f"🖼️ Total Photo Files: {session['photo']} \n"
             f"🎬 Total Video Files: {session['video']} \n"
             f"💾 Total Size: {total_size}"
         )
     else:
         text = (
-            f"📦 Upload Completed\n\n"
+            f"⚔️ Upload Completed 🕷\n\n"
             f"Total Sent: {session['total']}\n"
             f"✅ Saved: {session['saved']}\n\n"
-            f"📦 Total Files: {total_files}\n"
+            f"🗃️ Total Files: {total_files}\n"
             f"🎬 Total Video Files: {session['video']} \n"
             f"🖼️ Total Photo Files: {session['photo']} \n"
             f"💾 Total Size: {total_size}"
