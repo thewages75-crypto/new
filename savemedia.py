@@ -1231,7 +1231,7 @@ def queue_worker():
         chat_id = job["chat_id"]
         job_id = job["job_id"]
         group_id = job["group_id"]
-        delay = job.get("speed", 1)
+        delay = job.get("speed", 2.5)
 
         
         progress_message = bot.send_message(chat_id, "📤 Sending started...")
@@ -1250,7 +1250,7 @@ def queue_worker():
         base_delay = delay
         extra_delay = 0
         extra_pause_extension = 0
-        safe_break_interval = 1000   # pause every 1000 files
+        safe_break_interval = 600   # pause every 1000 files
         # Group media
         target_user = job["target_user"]
         # Get resume position from DB
@@ -1366,7 +1366,7 @@ def queue_worker():
                             current_speed = 0
 
                         # Base pause: 5 minutes
-                        pause_time = 300 + extra_pause_extension
+                        pause_time = 360 + extra_pause_extension
 
                         # Dynamic adjustment
                         if current_speed > 2:
@@ -1394,7 +1394,7 @@ def queue_worker():
                     # =====================
                     # PROGRESS UPDATE
                     # =====================
-                    if sent % 5 == 0 or sent == total:
+                    if sent % 10 == 0 or sent == total:
 
                         percent = int((sent / total) * 100)
                         elapsed = time.time() - start_time
