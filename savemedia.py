@@ -4,6 +4,7 @@
 
 import telebot
 from telebot.types import InlineKeyboardMarkup, InlineKeyboardButton
+import os
 import psycopg2
 from psycopg2 import pool
 import threading
