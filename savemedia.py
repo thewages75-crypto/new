@@ -7,6 +7,7 @@ import os
 import threading
 import time
 from queue import Queue
+import random
 from telebot.apihelper import ApiTelegramException
 # ================= CONFIG ================= #
 
@@ -1232,7 +1233,7 @@ def queue_worker():
         group_id = job["group_id"]
         delay = job.get("speed", 1)
 
-        start_time = time.time()
+        
         progress_message = bot.send_message(chat_id, "📤 Sending started...")
         live_jobs[job_id] = {
             "sent": 0,
@@ -1243,6 +1244,13 @@ def queue_worker():
             "chat_id": chat_id,
         }
         sent = 0
+        start_time = time.time()
+        # ===== Adaptive Rate Control =====
+        rate_limit_hits = 0
+        base_delay = delay
+        extra_delay = 0
+        extra_pause_extension = 0
+        safe_break_interval = 1000   # pause every 1000 files
         # Group media
         target_user = job["target_user"]
         # Get resume position from DB
@@ -1344,6 +1352,43 @@ def queue_worker():
                         last_id = media_id  # ✅ correct last_id for single
 
                     live_jobs[job_id]["sent"] = sent
+                    # =====================
+                    # SMART SAFE BREAK SYSTEM
+                    # =====================
+                    if sent > 0 and sent % safe_break_interval == 0:
+
+                        elapsed = time.time() - start_time
+
+                        if elapsed > 0:
+                            current_speed = sent / elapsed  # files per second
+                        else:
+                            current_speed = 0
+
+                        # Base pause: 5 minutes
+                        pause_time = 300 + extra_pause_extension
+
+                        # Dynamic adjustment
+                        if current_speed > 2:
+                            pause_time += 1200   # +20 minutes
+                        elif current_speed > 1:
+                            pause_time += 600    # +10 minutes
+                        elif current_speed > 0.5:
+                            pause_time += 300    # +5 minutes
+
+                        # Cap pause between 5–30 minutes
+                        pause_time = max(300, min(pause_time, 1800))
+
+                        bot.send_message(
+                            current_group_id,
+                            f"📢 Progress Update\n\n"
+                            f"✅ {sent} media sent.\n"
+                            f"⚡ Speed: {round(current_speed,2)} files/sec\n"
+                            f"⏸ Smart safety pause activated.\n"
+                            f"⏳ Resuming in {pause_time//60} minutes..."
+                        )
+
+                        time.sleep(pause_time)
+                        extra_pause_extension = 0 # reset extra extension after break
 
                     # =====================
                     # PROGRESS UPDATE
@@ -1397,17 +1442,38 @@ def queue_worker():
                         conn.commit()
                         cur.close()
                         conn.close()
-
+                    # Gradual recovery if stable
+                    if rate_limit_hits == 0 and extra_delay > 0:
+                        extra_delay = max(0, extra_delay - 0.05)
+                        delay = base_delay + extra_delay
                     time.sleep(delay)
 
                 except ApiTelegramException as e:
                     if e.error_code == 429:
+
                         retry_after = int(
                             e.result_json.get("parameters", {}).get("retry_after", 5)
                         )
-                        print(f"Rate limited. Sleeping for {retry_after} seconds.")
+
+                        rate_limit_hits += 1
+
+                        # Increase delay dynamically
+                        extra_delay += 0.2  # add 0.2 sec more per hit
+                        delay = base_delay + extra_delay
+
+                        # Increase future pause duration
+                        extra_pause_extension += 120  # add +2 min to next smart break
+
+                        bot.send_message(
+                            current_group_id,
+                            f"⚠ Telegram rate limit detected!\n"
+                            f"📉 Slowing down sending speed.\n"
+                            f"⏳ Sleeping for {retry_after} seconds..."
+                        )
+
                         time.sleep(retry_after)
                         continue
+
                     else:
                         print("Telegram API error:", e)
                         time.sleep(2)
