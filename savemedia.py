@@ -7,7 +7,7 @@ import os
 import threading
 import time
 from queue import Queue
-
+from telebot.apihelper import ApiTelegramException
 # ================= CONFIG ================= #
 
 BOT_TOKEN = "8606303101:AAGw3fHdI5jpZOOuFCSoHlPKb1Urj4Oidk4"
@@ -253,7 +253,6 @@ def admin_group_input(message):
         live_jobs[job_id]["group_title"] = group_title
 
         # Update DB
-    # Update DB every 10 files to reduce load
         conn = get_connection()
         cur = conn.cursor()
         cur.execute("""
@@ -920,23 +919,31 @@ def callback_handler(call):
         user_id = state["target_user"]
         group_id = state.get("group_id")
         speed = state.get("speed", 1)
-
-        if not group_id:
-            bot.answer_callback_query(call.id, "Send group first")
-            return
-
+        # fetch title safely
         try:
             chat = bot.get_chat(group_id)
             group_title = chat.title
         except:
             group_title = str(group_id)
 
-        bot.send_message(call.message.chat.id, "📥 Preparing job...")
+        if not group_id:
+            bot.answer_callback_query(call.id, "Send group first")
+            return
 
+        bot.send_message(call.message.chat.id, "📥 Preparing media list...")
         conn = get_connection()
         cur = conn.cursor()
 
-        # Create job FIRST
+        # Fetch media
+        cur.execute("""
+            SELECT id, file_id, file_type, caption, media_group_id
+            FROM stored_media
+            WHERE user_id=%s
+            ORDER BY id ASC
+        """, (user_id,))
+        rows = cur.fetchall()
+
+        # Create job
         cur.execute("""
             INSERT INTO send_jobs (admin_id, target_user, group_id)
             VALUES (%s,%s,%s)
@@ -956,25 +963,34 @@ def callback_handler(call):
         conn.commit()
         cur.close()
         conn.close()
-
+        if not rows:
+            bot.send_message(call.message.chat.id, "⚠ No media found.")
+            return
         with job_status_lock:
             job_status_cache[job_id] = "running"
-
         job_queue.put({
             "job_id": job_id,
             "group_id": group_id,
             "group_title": group_title,
-            "target_user": user_id,
+            "rows": rows,
             "speed": speed,
+            "total": len(rows),
             "chat_id": call.message.chat.id
         })
-
         start_worker()
+        markup = InlineKeyboardMarkup()
+        markup.add(
+            InlineKeyboardButton("⏸ Pause", callback_data=f"pause_job_{job_id}"),
+            InlineKeyboardButton("▶ Resume", callback_data=f"resume_job_{job_id}")
+        )
 
         bot.send_message(
             call.message.chat.id,
-            "🚀 Sending started."
+            f"🚀 Sending started\nTotal files: {len(rows)}",
+            reply_markup=markup
         )
+
+        
 
         admin_send_state.pop(call.from_user.id, None)
     
@@ -1137,22 +1153,34 @@ def resume_jobs():
     cur = conn.cursor()
 
     cur.execute("""
-        SELECT id, target_user, group_id
+        SELECT id, target_user, group_id, last_sent_id
         FROM send_jobs
         WHERE is_active = TRUE
     """)
     jobs = cur.fetchall()
-
     cur.close()
     conn.close()
 
-    for job_id, target_user, group_id in jobs:
-
+    for job_id, target_user, group_id, last_sent_id in jobs:
         try:
             chat = bot.get_chat(group_id)
             group_title = chat.title
         except:
             group_title = str(group_id)
+        conn = get_connection()
+        cur = conn.cursor()
+        cur.execute("""
+            SELECT id, file_id, file_type, caption, media_group_id
+            FROM stored_media
+            WHERE user_id=%s AND id > %s
+            ORDER BY id ASC
+        """, (target_user, last_sent_id))
+        rows = cur.fetchall()
+        cur.close()
+        conn.close()
+
+        if not rows:
+            continue
 
         with job_status_lock:
             job_status_cache[job_id] = "running"
@@ -1160,9 +1188,10 @@ def resume_jobs():
         job_queue.put({
             "job_id": job_id,
             "group_id": group_id,
-            "group_title": group_title,
-            "target_user": target_user,
+            "group_title": group_title,  # ✅ FIX
+            "rows": rows,
             "speed": 1,
+            "total": len(rows),
             "chat_id": ADMIN_ID
         })
 
@@ -1183,276 +1212,173 @@ def build_progress_bar(percent, length=20):
 
 def queue_worker():
     global worker_running
-
     while True:
         try:
             job = job_queue.get(timeout=1)
         except:
             break
 
-        job_id = job["job_id"]
-        target_user = job["target_user"]
-        delay = job.get("speed", 1)
+        total = job["total"]
         chat_id = job["chat_id"]
-        pending_album = []
-        pending_mgid = None
-        pending_last_id = None
-        # Get group dynamically
+        job_id = job["job_id"]
         group_id = job["group_id"]
-        group_title = job["group_title"]
+        rows = job["rows"]
+        delay = job.get("speed", 1)
 
-        # Get total count
-        conn = get_connection()
-        cur = conn.cursor()
-        cur.execute("SELECT COUNT(*) FROM stored_media WHERE user_id=%s", (target_user,))
-        total = cur.fetchone()[0]
-
-        cur.execute("SELECT last_sent_id FROM send_jobs WHERE id=%s", (job_id,))
-        last_sent_id = cur.fetchone()[0]
-
-        cur.close()
-        conn.close()
-
+        start_time = time.time()
         progress_message = bot.send_message(chat_id, "📤 Sending started...")
-
         live_jobs[job_id] = {
             "sent": 0,
             "total": total,
-            "group_id": group_id,
-            "group_title": group_title,
+            "group_id": job["group_id"],
+            "group_title": job["group_title"],
             "message_id": progress_message.message_id,
             "chat_id": chat_id
         }
-
         sent = 0
-        BATCH_SIZE = 200
+        grouped = {}
 
-        while True:
+        # Group media
+        for media_id, file_id, file_type, caption, media_group_id in rows:
+            if media_group_id:
+                grouped.setdefault(media_group_id, []).append(
+                    (media_id, file_id, file_type, caption)
+                )
+            else:
+                grouped[f"single_{media_id}"] = [
+                    (media_id, file_id, file_type, caption)
+                ]
 
-            # Pause handling
-            while job_status_cache.get(job_id) == "paused":
+        for group_key, items in grouped.items():
+
+            # Wait if paused
+            while job_status_cache[job_id] == "paused":
                 time.sleep(1)
 
-            conn = get_connection()
-            cur = conn.cursor()
-            cur.execute("""
-                SELECT id, file_id, file_type, caption, media_group_id
-                FROM stored_media
-                WHERE user_id=%s AND id > %s
-                ORDER BY id ASC
-                LIMIT %s
-            """, (target_user, last_sent_id, BATCH_SIZE))
+            # Always get latest group
+            current_group_id = live_jobs[job_id]["group_id"]
 
-            rows = cur.fetchall()
-            cur.close()
-            conn.close()
+            try:
+                # =====================
+                # ALBUM
+                # =====================
+                if len(items) > 1 and all(i[2] in ["photo", "video"] for i in items):
 
-            if not rows:
-                break
+                    media_list = []
 
-            i = 0
-            while i < len(rows):
+                    for index, (media_id, file_id, file_type, caption) in enumerate(items):
 
-                media_id, file_id, file_type, caption, mgid = rows[i]
-                current_group = live_jobs[job_id]["group_id"]
-                # ===== SAFE PENDING FLUSH =====
-                if pending_album and pending_mgid != mgid:
+                        if file_type == "photo":
+                            if index == 0:
+                                media_list.append(InputMediaPhoto(file_id, caption=caption))
+                            else:
+                                media_list.append(InputMediaPhoto(file_id))
 
-                    bot.send_media_group(current_group, pending_album)
-                    sent += len(pending_album)
-                    last_sent_id = pending_last_id
+                        elif file_type == "video":
+                            if index == 0:
+                                media_list.append(InputMediaVideo(file_id, caption=caption))
+                            else:
+                                media_list.append(InputMediaVideo(file_id))
 
-                    # Update DB immediately
+                    bot.send_media_group(current_group_id, media_list)
+
+                    sent += len(items)
+                    last_id = items[-1][0]  # ✅ correct last_id for album
+
+                # =====================
+                # SINGLE
+                # =====================
+                else:
+                    media_id, file_id, file_type, caption = items[0]
+
+                    if file_type == "photo":
+                        bot.send_photo(current_group_id, file_id, caption=caption)
+                    elif file_type == "video":
+                        bot.send_video(current_group_id, file_id, caption=caption)
+                    elif file_type == "document":
+                        bot.send_document(current_group_id, file_id, caption=caption)
+                    elif file_type == "audio":
+                        bot.send_audio(current_group_id, file_id, caption=caption)
+
+                    sent += 1
+                    last_id = media_id  # ✅ correct last_id for single
+
+                live_jobs[job_id]["sent"] = sent
+
+                # =====================
+                # PROGRESS UPDATE
+                # =====================
+                if sent % 5 == 0 or sent == total:
+
+                    percent = int((sent / total) * 100)
+                    elapsed = time.time() - start_time
+
+                    if sent > 0:
+                        avg_time = elapsed / sent
+                        remaining = total - sent
+                        eta_seconds = int(avg_time * remaining)
+                        speed = round(sent / elapsed, 2)
+                    else:
+                        eta_seconds = 0
+                        speed = 0
+
+                    minutes = eta_seconds // 60
+                    seconds = eta_seconds % 60
+                    eta_text = f"{minutes}m {seconds}s" if eta_seconds > 0 else "calculating..."
+
+                    bar = build_progress_bar(percent)
+
+                    progress_text = (
+                        " Sending Media ⌯⌲\n\n"
+                        f"[{bar}] {percent}%\n\n"
+                        f"📊 {sent} / {total} files\n"
+                        f"⚡ Speed: {speed} files/sec\n"
+                        f"⏳ ETA: {eta_text}"
+                    )
+
+                    bot.edit_message_text(
+                        progress_text,
+                        chat_id,
+                        progress_message.message_id
+                    )
+
+                # =====================
+                # UPDATE RESUME POSITION
+                # =====================
+                # Update resume position every 50 files
+                if sent % 50 == 0 or sent == total:
                     conn = get_connection()
                     cur = conn.cursor()
                     cur.execute("""
                         UPDATE send_jobs
-                        SET last_sent_id=%s
-                        WHERE id=%s
-                    """, (last_sent_id, job_id))
+                        SET last_sent_id = %s
+                        WHERE id = %s
+                    """, (last_id, job_id))
                     conn.commit()
                     cur.close()
                     conn.close()
 
-                    # Clear pending buffer
-                    pending_album = []
-                    pending_mgid = None
-                    pending_last_id = None
+                time.sleep(delay)
 
-                    # DO NOT increment i here
-                    # Let this same row be processed normally
+            try:
+                # existing sending logic here
 
-                try:
-                    if pending_mgid and mgid != pending_mgid:
-                        # Send leftover pending album first
-                        bot.send_media_group(current_group, pending_album)
-                        sent += len(pending_album)
-                        last_sent_id = pending_last_id
+            except ApiTelegramException as e:
+                if e.error_code == 429:
+                    retry_after = int(e.result_json.get("parameters", {}).get("retry_after", 5))
+                    print(f"Rate limited. Sleeping for {retry_after} seconds.")
+                    time.sleep(retry_after)
+                    continue
+                else:
+                    print("Telegram API error:", e)
+                    time.sleep(2)
+                    continue
 
-                        pending_album = []
-                        pending_mgid = None
-                        pending_last_id = None
-
-                    # ================= CONTINUE PENDING ALBUM =================
-                    if pending_mgid and mgid == pending_mgid:
-
-                        if file_type == "photo":
-                            pending_album.append(
-                                InputMediaPhoto(file_id, caption=None)
-                            )
-                        elif file_type == "video":
-                            pending_album.append(
-                                InputMediaVideo(file_id, caption=None)
-                            )
-
-                        pending_last_id = media_id
-                        i += 1
-
-                        if len(pending_album) == 10:
-                            bot.send_media_group(current_group, pending_album)
-                            sent += len(pending_album)
-                            last_sent_id = pending_last_id
-
-                            pending_album = []
-                            pending_mgid = None
-                            pending_last_id = None
-
-                        continue
-
-                    # ================= NEW ALBUM =================
-                    if mgid:
-
-                        album_items = []
-                        album_last_id = media_id
-
-                        if file_type == "photo":
-                            album_items.append(
-                                InputMediaPhoto(file_id, caption=caption)
-                            )
-                        elif file_type == "video":
-                            album_items.append(
-                                InputMediaVideo(file_id, caption=caption)
-                            )
-
-                        i += 1
-
-                        while i < len(rows) and rows[i][4] == mgid and len(album_items) < 10:
-                            m_id, f_id, f_type, cap, _ = rows[i]
-
-                            if f_type == "photo":
-                                album_items.append(InputMediaPhoto(f_id))
-                            elif f_type == "video":
-                                album_items.append(InputMediaVideo(f_id))
-
-                            album_last_id = m_id
-                            i += 1
-                        # If batch ended but album not finished → store pending
-                        # Check if album might continue in next batch
-                        if i == len(rows):
-
-                            # Look ahead safely
-                            conn = get_connection()
-                            cur = conn.cursor()
-                            cur.execute("""
-                                SELECT media_group_id
-                                FROM stored_media
-                                WHERE user_id=%s AND id > %s
-                                ORDER BY id ASC
-                                LIMIT 1
-                            """, (target_user, album_last_id))
-
-                            next_row = cur.fetchone()
-
-                            cur.close()
-                            conn.close()
-
-                            # Now safe to check
-                            if next_row and next_row[0] == mgid:
-                                # Album continues in next batch
-                                pending_album = album_items
-                                pending_mgid = mgid
-                                pending_last_id = album_last_id
-                                break
-                            else:
-                                # Album finished here
-                                bot.send_media_group(current_group, album_items)
-                                sent += len(album_items)
-                                last_sent_id = album_last_id
-
-                    # ================= SINGLE =================
-                    else:
-
-                        bot.send_photo(current_group, file_id, caption=caption) \
-                            if file_type == "photo" else \
-                        bot.send_video(current_group, file_id, caption=caption) \
-                            if file_type == "video" else \
-                        bot.send_document(current_group, file_id, caption=caption) \
-                            if file_type == "document" else \
-                        bot.send_audio(current_group, file_id, caption=caption)
-
-                        sent += 1
-                        last_sent_id = media_id
-                        i += 1
-
-                    # Update DB every 10 files
-                    if sent % 10 == 0:
-                        conn = get_connection()
-                        cur = conn.cursor()
-                        cur.execute("""
-                            UPDATE send_jobs
-                            SET last_sent_id=%s
-                            WHERE id=%s
-                        """, (last_sent_id, job_id))
-                        conn.commit()
-                        cur.close()
-                        conn.close()
-
-                    time.sleep(delay)
-
-                except telebot.apihelper.ApiTelegramException as e:
-                    if e.error_code == 429:
-                        retry = int(e.result_json["parameters"]["retry_after"])
-                        time.sleep(retry)
-                    else:
-                        print("Telegram error:", e)
-                        time.sleep(2)
-        
-        if pending_album:
-            bot.send_media_group(current_group, pending_album)
-            sent += len(pending_album)
-            last_sent_id = pending_last_id
-
-            conn = get_connection()
-            cur = conn.cursor()
-            cur.execute("""
-                UPDATE send_jobs
-                SET last_sent_id=%s
-                WHERE id=%s
-            """, (last_sent_id, job_id))
-            conn.commit()
-            cur.close()
-            conn.close()
-        # Now mark inactive
-        conn = get_connection()
-        cur = conn.cursor()
-        cur.execute("""
-            UPDATE send_jobs
-            SET is_active = FALSE
-            WHERE id = %s
-        """, (job_id,))
-        conn.commit()
-        cur.close()
-        conn.close()
-        # sent = 0        
-        bot.edit_message_text(
-            f"✅ Sending completed.\n\n{sent} files sent.",
-            chat_id,
-            live_jobs[job_id]["message_id"]
-        )
-
-        job_queue.task_done()
-
-    worker_running = False
+            except Exception as e:
+                print("Unexpected error:", e)
+                time.sleep(2)
+                continue
+        worker_running = False
         # reuse your sender logic here
 # ================= START BOT ================= #
 
