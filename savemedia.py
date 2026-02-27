@@ -1258,7 +1258,7 @@ def queue_worker():
             # Always get latest group
             current_group_id = live_jobs[job_id]["group_id"]
 
-            try:
+            try:    
                 # =====================
                 # ALBUM
                 # =====================
@@ -1360,12 +1360,11 @@ def queue_worker():
 
                 time.sleep(delay)
 
-            try:
-                # existing sending logic here
-
             except ApiTelegramException as e:
                 if e.error_code == 429:
-                    retry_after = int(e.result_json.get("parameters", {}).get("retry_after", 5))
+                    retry_after = int(
+                        e.result_json.get("parameters", {}).get("retry_after", 5)
+                    )
                     print(f"Rate limited. Sleeping for {retry_after} seconds.")
                     time.sleep(retry_after)
                     continue
