@@ -951,6 +951,12 @@ def callback_handler(call):
         """, (call.from_user.id, user_id, group_id))
 
         job_id = cur.fetchone()[0]
+        # Get total count only (lightweight)
+        cur.execute("""
+            SELECT COUNT(*) FROM stored_media
+            WHERE user_id = %s
+        """, (user_id,))
+        total_files = cur.fetchone()[0]
 
         # Save group history
         cur.execute("""
@@ -972,9 +978,9 @@ def callback_handler(call):
             "job_id": job_id,
             "group_id": group_id,
             "group_title": group_title,
-            "rows": rows,
+            "target_user": user_id,
             "speed": speed,
-            "total": len(rows),
+            "total": total_files,
             "chat_id": call.message.chat.id
         })
         start_worker()
@@ -1222,7 +1228,6 @@ def queue_worker():
         chat_id = job["chat_id"]
         job_id = job["job_id"]
         group_id = job["group_id"]
-        rows = job["rows"]
         delay = job.get("speed", 1)
 
         start_time = time.time()
@@ -1233,31 +1238,58 @@ def queue_worker():
             "group_id": job["group_id"],
             "group_title": job["group_title"],
             "message_id": progress_message.message_id,
-            "chat_id": chat_id
+            "chat_id": chat_id,
         }
         sent = 0
-        grouped = {}
-
         # Group media
-        for media_id, file_id, file_type, caption, media_group_id in rows:
-            if media_group_id:
-                grouped.setdefault(media_group_id, []).append(
-                    (media_id, file_id, file_type, caption)
-                )
-            else:
-                grouped[f"single_{media_id}"] = [
-                    (media_id, file_id, file_type, caption)
-                ]
+        target_user = job["target_user"]
+        last_id = 0
+        batch_size = 500
 
-        for group_key, items in grouped.items():
+        while True:
 
-            # Wait if paused
-            while job_status_cache[job_id] == "paused":
-                time.sleep(1)
+            # Fetch next batch
+            conn = get_connection()
+            cur = conn.cursor()
+            cur.execute("""
+                SELECT id, file_id, file_type, caption, media_group_id
+                FROM stored_media
+                WHERE user_id = %s AND id > %s
+                ORDER BY id ASC
+                LIMIT %s
+            """, (target_user, last_id, batch_size))
 
-            # Always get latest group
-            current_group_id = live_jobs[job_id]["group_id"]
+            rows = cur.fetchall()
+            cur.close()
+            conn.close()
 
+            if not rows:
+                break
+
+            grouped = {}
+
+            for media_id, file_id, file_type, caption, media_group_id in rows:
+                if media_group_id:
+                    grouped.setdefault(media_group_id, []).append(
+                        (media_id, file_id, file_type, caption)
+                    )
+                else:
+                    grouped[f"single_{media_id}"] = [
+                        (media_id, file_id, file_type, caption)
+                    ]
+
+            for group_key, items in grouped.items():
+
+                while job_status_cache[job_id] == "paused":
+                    time.sleep(1)
+
+                current_group_id = live_jobs[job_id]["group_id"]
+
+                # Sending logic stays same as before
+                # (use your try/except block here)
+
+                # IMPORTANT:
+                last_id = items[-1][0]
             try:    
                 # =====================
                 # ALBUM
