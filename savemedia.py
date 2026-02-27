@@ -1365,41 +1365,63 @@ def queue_worker():
                     # =====================
                     # SMART SAFE BREAK SYSTEM
                     # =====================
-                    if sent > 0 and sent % safe_break_interval == 0:
+                    # # if sent > 0 and sent % safe_break_interval == 0:
+                    # if sent > 0 and sent // safe_break_interval > (sent - len(items)) // safe_break_interval:
 
-                        elapsed = time.time() - start_time
+                    #     elapsed = time.time() - start_time
 
-                        if elapsed > 0:
-                            current_speed = sent / elapsed  # files per second
-                        else:
-                            current_speed = 0
+                    #     if elapsed > 0:
+                    #         current_speed = sent / elapsed  # files per second
+                    #     else:
+                    #         current_speed = 0
 
-                        # Base pause: 5 minutes
-                        pause_time = 360 + extra_pause_extension
+                    #     # Base pause: 5 minutes
+                    #     pause_time = 360 + extra_pause_extension
 
-                        # Dynamic adjustment
-                        if current_speed > 2:
-                            pause_time += 1200   # +20 minutes
-                        elif current_speed > 1:
-                            pause_time += 600    # +10 minutes
-                        elif current_speed > 0.5:
-                            pause_time += 300    # +5 minutes
+                    #     # Dynamic adjustment
+                    #     if current_speed > 2:
+                    #         pause_time += 1200   # +20 minutes
+                    #     elif current_speed > 1:
+                    #         pause_time += 600    # +10 minutes
+                    #     elif current_speed > 0.5:
+                    #         pause_time += 300    # +5 minutes
 
-                        # Cap pause between 5–30 minutes
-                        pause_time = max(300, min(pause_time, 1800))
+                    #     # Cap pause between 5–30 minutes
+                    #     pause_time = max(300, min(pause_time, 1800))
 
-                        bot.send_message(
-                            current_group_id,
-                            f"📢 Progress Update\n\n"
-                            f"✅ {sent} media sent.\n"
-                            f"⚡ Speed: {round(current_speed,2)} files/sec\n"
-                            f"⏸ Smart safety pause activated.\n"
-                            f"⏳ Resuming in {pause_time//60} minutes..."
-                        )
+                    #     bot.send_message(
+                    #         current_group_id,
+                    #         f"📢 Progress Update\n\n"
+                    #         f"✅ {sent} media sent.\n"
+                    #         f"⚡ Speed: {round(current_speed,2)} files/sec\n"
+                    #         f"⏸ Smart safety pause activated.\n"
+                    #         f"⏳ Resuming in {pause_time//60} minutes..."
+                    #     )
+
+                    #     time.sleep(pause_time)
+                    #     extra_pause_extension = 0 # reset extra extension after break
+                    if sent > 0 and sent // safe_break_interval > (sent - len(items)) // safe_break_interval:
+
+                        resume_timestamp = int(time.time() + pause_time)
+                        resume_clock = time.strftime("%H:%M:%S", time.localtime(resume_timestamp))
+
+                        percent = int((sent / total) * 100)
+
+                        try:
+                            bot.send_message(
+                                current_group_id,
+                                f"⏸ Smart Safety Pause Activated\n\n"
+                                f"📦 Total Media in Job: {total}\n"
+                                f"✅ Media Sent: {sent}\n"
+                                f"📊 Progress: {percent}%\n\n"
+                                f"⏳ Pause Duration: {pause_time//60} min\n"
+                                f"🕒 Resuming At: {resume_clock}\n\n"
+                                f"🚀 Sending will continue automatically."
+                            )
+                        except Exception as e:
+                            print("Pause message failed:", e)
 
                         time.sleep(pause_time)
-                        extra_pause_extension = 0 # reset extra extension after break
-
                     # =====================
                     # PROGRESS UPDATE
                     # =====================
