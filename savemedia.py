@@ -935,13 +935,13 @@ def callback_handler(call):
         cur = conn.cursor()
 
         # Fetch media
-        cur.execute("""
-            SELECT id, file_id, file_type, caption, media_group_id
-            FROM stored_media
-            WHERE user_id=%s
-            ORDER BY id ASC
-        """, (user_id,))
-        rows = cur.fetchall()
+        # cur.execute("""
+        #     SELECT id, file_id, file_type, caption, media_group_id
+        #     FROM stored_media
+        #     WHERE user_id=%s
+        #     ORDER BY id ASC
+        # """, (user_id,))
+        # rows = cur.fetchall()
 
         # Create job
         cur.execute("""
@@ -957,7 +957,9 @@ def callback_handler(call):
             WHERE user_id = %s
         """, (user_id,))
         total_files = cur.fetchone()[0]
-
+        if total_files == 0:
+            bot.send_message(call.message.chat.id, "⚠ No media found.")
+            return
         # Save group history
         cur.execute("""
             INSERT INTO user_send_groups (target_user, group_id, group_title)
@@ -969,9 +971,6 @@ def callback_handler(call):
         conn.commit()
         cur.close()
         conn.close()
-        if not rows:
-            bot.send_message(call.message.chat.id, "⚠ No media found.")
-            return
         with job_status_lock:
             job_status_cache[job_id] = "running"
         job_queue.put({
@@ -992,7 +991,7 @@ def callback_handler(call):
 
         bot.send_message(
             call.message.chat.id,
-            f"🚀 Sending started\nTotal files: {len(rows)}",
+            f"🚀 Sending started\nTotal files: {total_files}",
             reply_markup=markup
         )
 
@@ -1418,7 +1417,7 @@ def queue_worker():
                     print("Unexpected error:", e)
                     time.sleep(2)
                     continue
-        worker_running = False
+    worker_running = False
         # reuse your sender logic here
 # ================= START BOT ================= #
 
