@@ -992,7 +992,7 @@ def callback_handler(call):
 
         bot.send_message(
             call.message.chat.id,
-            f"🚀 Sending Started\nFrom User ID: {user_id}\nTo Group: {group_title}\nTotal files: {total_files}"
+            f"🚀 Sending Started\nFrom User ID: {user_id}\nTo Group: {group_title}\nTotal files: {total_files}",
             reply_markup=markup
         )
 
