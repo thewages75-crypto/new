@@ -226,6 +226,7 @@ def dashboard_markup(user_id):
 
     return markup
 
+
 @bot.message_handler(commands=['start'])
 def start(message):
     save_user(message.from_user)
@@ -355,7 +356,9 @@ def finalize_user_upload(user_id, chat_id):
 
 album_buffer = {}
 album_timers = {}
+def reset_user_timer(user_id, chat_id):
 
+    reset_user_timer(user_id, chat_id)
 @bot.message_handler(content_types=['photo','video','document','audio'])
 def handle_media(message):
 
@@ -441,16 +444,7 @@ def handle_media(message):
 
             user_sessions[user_id]["total"] += len(items)
 
-            if user_id in user_timers:
-                user_timers[user_id].cancel()
-
-            t2 = threading.Timer(
-                2.0,
-                finalize_user_upload,
-                args=(user_id, chat_id)
-            )
-            user_timers[user_id] = t2
-            t2.start()
+            reset_user_timer(user_id, message.chat.id)
         # Start timer properly with argument
         t = threading.Timer(1.2, finalize_album, args=(media_group_id,))
         album_timers[media_group_id] = t
@@ -996,8 +990,11 @@ def callback_handler(call):
         start_worker()
         markup = InlineKeyboardMarkup()
         markup.add(
-            InlineKeyboardButton("⏸ Pause", callback_data=f"pause_job_{job_id}"),
-            InlineKeyboardButton("▶ Resume", callback_data=f"resume_job_{job_id}")
+            InlineKeyboardButton("🔁 Change Group", callback_data=f"change_group_{job_id}")
+        )
+        markup.add(
+            InlineKeyboardButton("▶ Resume", callback_data=f"resume_job_{job_id}"),
+            InlineKeyboardButton("❌ Cancel", callback_data=f"cancel_job_{job_id}")
         )
 
         bot.send_message(
@@ -1105,6 +1102,36 @@ def callback_handler(call):
             call.message.message_id,
             reply_markup=markup
         )
+    elif data.startswith("cancel_job_"):
+
+        job_id = int(data.split("_")[-1])
+
+        # Stop worker loop
+        with job_status_lock:
+            job_status_cache[job_id] = "cancelled"
+
+        # Mark job inactive in DB
+        conn = get_connection()
+        cur = conn.cursor()
+        cur.execute("""
+            UPDATE send_jobs
+            SET is_active = FALSE
+            WHERE id = %s
+        """, (job_id,))
+        conn.commit()
+        cur.close()
+        conn.close()
+
+        job = live_jobs.get(job_id)
+
+        if job:
+            bot.edit_message_text(
+                "❌ Media sending cancelled.",
+                job["chat_id"],
+                job["message_id"]
+            )
+        live_jobs.pop(job_id, None)
+        bot.answer_callback_query(call.id, "Job cancelled")
 
     elif data.startswith("get_"):
         _, file_type, media_id = data.split("_")
@@ -1305,9 +1332,16 @@ def queue_worker():
                     ]
 
             for group_key, items in grouped.items():
+                if job_status_cache.get(job_id) == "cancelled":
+                    print("Job cancelled during sending:", job_id)
+                    break
 
-                while job_status_cache[job_id] == "paused":
+                while job_status_cache.get(job_id) == "paused":
                     time.sleep(1)
+
+                if job_status_cache.get(job_id) == "cancelled":
+                    print("Job cancelled:", job_id)
+                    break
 
                 current_group_id = live_jobs[job_id]["group_id"]
 
