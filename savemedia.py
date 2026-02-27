@@ -234,6 +234,19 @@ def start(message):
         dashboard_text(message.from_user.id),
         reply_markup=dashboard_markup(message.from_user.id)
     )
+@bot.message_handler(commands=['reset_jobs'])
+def reset_jobs(message):
+    if message.from_user.id != ADMIN_ID:
+        return
+
+    conn = get_connection()
+    cur = conn.cursor()
+    cur.execute("UPDATE send_jobs SET is_active = FALSE WHERE is_active = TRUE")
+    conn.commit()
+    cur.close()
+    conn.close()
+
+    bot.send_message(message.chat.id, "All active jobs reset.")
 @bot.message_handler(func=lambda m: m.from_user.id == ADMIN_ID and m.from_user.id in admin_send_state)
 def admin_group_input(message):
     
