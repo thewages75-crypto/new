@@ -999,6 +999,9 @@ def callback_handler(call):
             InlineKeyboardButton("⏸ Pause", callback_data=f"pause_job_{job_id}"),
             InlineKeyboardButton("▶ Resume", callback_data=f"resume_job_{job_id}")
         )
+        markup.add(
+            InlineKeyboardButton("❌ Cancel", callback_data=f"cancel_job_{job_id}")
+        )
 
         bot.send_message(
             call.message.chat.id,
@@ -1009,7 +1012,28 @@ def callback_handler(call):
         
 
         admin_send_state.pop(call.from_user.id, None)
-    
+    elif data.startswith("cancel_job_"):
+
+        job_id = int(data.split("_")[-1])
+
+        # Mark job as cancelled
+        conn = get_connection()
+        cur = conn.cursor()
+        cur.execute("""
+            UPDATE send_jobs
+            SET is_active = FALSE
+            WHERE id = %s
+        """, (job_id,))
+        conn.commit()
+        cur.close()
+        conn.close()
+
+        # Update memory status
+        with job_status_lock:
+            job_status_cache[job_id] = "cancelled"
+
+        bot.answer_callback_query(call.id, "Job cancelled.")
+        bot.send_message(call.message.chat.id, "❌ Sending cancelled successfully.")    
     elif data == "menu_files":
         bot.edit_message_text(
             "📂 Select Category",
@@ -1273,6 +1297,9 @@ def queue_worker():
         batch_size = 2000
 
         while True:
+            if job_status_cache.get(job_id) == "cancelled":
+                print("Job cancelled before next batch.")
+                break
 
             # Fetch next batch
             conn = get_connection()
@@ -1305,6 +1332,10 @@ def queue_worker():
                     ]
 
             for group_key, items in grouped.items():
+                # Check for cancellation
+                if job_status_cache.get(job_id) == "cancelled":
+                    print("Job cancelled by admin.")
+                    break
 
                 while job_status_cache[job_id] == "paused":
                     time.sleep(1)
@@ -1503,6 +1534,8 @@ def queue_worker():
         cur.close()
         conn.close()
         job_queue.task_done()
+        with job_status_lock:
+            job_status_cache.pop(job_id, None)
     worker_running = False
         # reuse your sender logic here
 # ================= START BOT ================= #
