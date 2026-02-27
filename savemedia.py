@@ -993,7 +993,7 @@ def callback_handler(call):
             InlineKeyboardButton("🔁 Change Group", callback_data=f"change_group_{job_id}")
         )
         markup.add(
-            InlineKeyboardButton("▶ Resume", callback_data=f"resume_job_{job_id}"),
+            InlineKeyboardButton("⏸ Pause", callback_data=f"pause_job_{job_id}"),
             InlineKeyboardButton("❌ Cancel", callback_data=f"cancel_job_{job_id}")
         )
 
@@ -1036,8 +1036,13 @@ def callback_handler(call):
 
         markup = InlineKeyboardMarkup()
         markup.add(
-            InlineKeyboardButton("🔁 Change Group", callback_data=f"change_group_{job_id}"),
             InlineKeyboardButton("▶ Resume", callback_data=f"resume_job_{job_id}")
+        )
+        markup.add(
+            InlineKeyboardButton("🔁 Change Group", callback_data=f"change_group_{job_id}")
+        )
+        markup.add(
+            InlineKeyboardButton("❌ Cancel", callback_data=f"cancel_job_{job_id}")
         )
 
         text = (
@@ -1087,8 +1092,25 @@ def callback_handler(call):
                 f"[{bar}] {percent}%\n\n"
                 f"📊 {sent} / {total} files sent"
             )
+            markup = InlineKeyboardMarkup()
+            markup.add(
+                InlineKeyboardButton("⏸ Pause", callback_data=f"pause_job_{job_id}")
+            )
+            markup.add(
+                InlineKeyboardButton("🔁 Change Group", callback_data=f"change_group_{job_id}")
+            )
+            markup.add(
+                InlineKeyboardButton("❌ Cancel", callback_data=f"cancel_job_{job_id}")
+            )
 
-            bot.edit_message_text(text, chat_id, message_id)
+            bot.edit_message_text(
+                text,
+                chat_id,
+                message_id,
+                reply_markup=markup
+            )
+
+            # bot.edit_message_text(text, chat_id, message_id)
 
         bot.answer_callback_query(call.id, "Resumed")
     
@@ -1333,7 +1355,7 @@ def queue_worker():
 
             for group_key, items in grouped.items():
                 if job_status_cache.get(job_id) == "cancelled":
-                    print("Job cancelled during sending:", job_id)
+                    # print("Job cancelled during sending:", job_id)
                     break
 
                 while job_status_cache.get(job_id) == "paused":
@@ -1434,8 +1456,11 @@ def queue_worker():
 
                     #     time.sleep(pause_time)
                     #     extra_pause_extension = 0 # reset extra extension after break
-                    if sent > 0 and sent // safe_break_interval > (sent - len(items)) // safe_break_interval:
+                    previous_sent = sent - len(items)
 
+                    if previous_sent // safe_break_interval < sent // safe_break_interval:
+
+                        pause_time = 360 + extra_pause_extension
                         resume_timestamp = int(time.time() + pause_time)
                         resume_clock = time.strftime("%H:%M:%S", time.localtime(resume_timestamp))
 
@@ -1455,7 +1480,14 @@ def queue_worker():
                         except Exception as e:
                             print("Pause message failed:", e)
 
-                        time.sleep(pause_time)
+                        sleep_interval = 1
+                        slept = 0
+
+                        while slept < pause_time:
+                            if job_status_cache.get(job_id) == "cancelled":
+                                break
+                            time.sleep(sleep_interval)
+                            slept += sleep_interval
                     # =====================
                     # PROGRESS UPDATE
                     # =====================
