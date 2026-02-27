@@ -989,6 +989,9 @@ def callback_handler(call):
             InlineKeyboardButton("⏸ Pause", callback_data=f"pause_job_{job_id}"),
             InlineKeyboardButton("▶ Resume", callback_data=f"resume_job_{job_id}")
         )
+        markup.row(
+            InlineKeyboardButton("❌ Cancel", callback_data=f"cancel_job_{job_id}")
+        )
 
         bot.send_message(
             call.message.chat.id,
