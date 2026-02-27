@@ -1194,8 +1194,8 @@ def resume_jobs():
         job_queue.put({
             "job_id": job_id,
             "group_id": group_id,
-            "group_title": group_title,  # ✅ FIX
-            "rows": rows,
+            "group_title": group_title,
+            "target_user": target_user,
             "speed": 1,
             "total": len(rows),
             "chat_id": ADMIN_ID
