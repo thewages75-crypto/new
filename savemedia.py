@@ -1173,19 +1173,22 @@ def resume_jobs():
             group_title = chat.title
         except:
             group_title = str(group_id)
+        # Get remaining file count only
         conn = get_connection()
         cur = conn.cursor()
+
         cur.execute("""
-            SELECT id, file_id, file_type, caption, media_group_id
+            SELECT COUNT(*)
             FROM stored_media
-            WHERE user_id=%s AND id > %s
-            ORDER BY id ASC
+            WHERE user_id = %s AND id > %s
         """, (target_user, last_sent_id))
-        rows = cur.fetchall()
+
+        remaining = cur.fetchone()[0]
+
         cur.close()
         conn.close()
 
-        if not rows:
+        if remaining == 0:
             continue
 
         with job_status_lock:
@@ -1197,7 +1200,7 @@ def resume_jobs():
             "group_title": group_title,
             "target_user": target_user,
             "speed": 1,
-            "total": len(rows),
+            "total": remaining,
             "chat_id": ADMIN_ID
         })
 
@@ -1243,7 +1246,13 @@ def queue_worker():
         sent = 0
         # Group media
         target_user = job["target_user"]
-        last_id = 0
+        # Get resume position from DB
+        conn = get_connection()
+        cur = conn.cursor()
+        cur.execute("SELECT last_sent_id FROM send_jobs WHERE id = %s", (job_id,))
+        last_id = cur.fetchone()[0] or 0
+        cur.close()
+        conn.close()
         batch_size = 500
 
         while True:
@@ -1409,7 +1418,7 @@ def queue_worker():
                     print("Unexpected error:", e)
                     time.sleep(2)
                     continue
-            worker_running = False
+        worker_running = False
         # reuse your sender logic here
 # ================= START BOT ================= #
 
