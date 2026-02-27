@@ -129,6 +129,41 @@ def get_users_page(page):
     conn.close()
 
     return users
+def validate_group(group_id):
+    try:
+        chat = bot.get_chat(group_id)
+
+        # Optional: check if bot is still member
+        member = bot.get_chat_member(group_id, bot.get_me().id)
+        if member.status in ["left", "kicked"]:
+            return False
+
+        return True
+
+    except Exception:
+        return False
+def clean_invalid_groups():
+    conn = get_connection()
+    cur = conn.cursor()
+    cur.execute("SELECT group_id FROM user_send_groups")
+    groups = cur.fetchall()
+    cur.close()
+    conn.close()
+
+    for (g_id,) in groups:
+        if not validate_group(g_id):
+            remove_group_from_db(g_id)
+            print("Removed invalid group:", g_id)
+def remove_group_from_db(group_id):
+    conn = get_connection()
+    cur = conn.cursor()
+    cur.execute("""
+        DELETE FROM user_send_groups
+        WHERE group_id = %s
+    """, (group_id,))
+    conn.commit()
+    cur.close()
+    conn.close()
 def get_total_storage():
     conn = get_connection()
     cur = conn.cursor()
@@ -855,12 +890,16 @@ def callback_handler(call):
 
         # Add previous groups as buttons
         for g_id, g_title in groups:
-            markup.add(
-                InlineKeyboardButton(
-                    f"📂 {g_title}",
-                    callback_data=f"use_group_{g_id}"
+
+            if validate_group(g_id):
+                markup.add(
+                    InlineKeyboardButton(
+                        f"📂 {g_title}",
+                        callback_data=f"use_group_{g_id}"
+                    )
                 )
-            )
+            else:
+                remove_group_from_db(g_id)
         # Add manual entry option
         markup.add(
             InlineKeyboardButton("➕ Use New Group", callback_data="enter_new_group")
@@ -1366,7 +1405,15 @@ def queue_worker():
                     break
 
                 current_group_id = live_jobs[job_id]["group_id"]
+                if not validate_group(current_group_id):
+                    print("Group invalid. Removing:", current_group_id)
 
+                    remove_group_from_db(current_group_id)
+
+                    with job_status_lock:
+                        job_status_cache[job_id] = "cancelled"
+
+                    break
                 # Sending logic stays same as before
                 # (use your try/except block here)
 
@@ -1579,6 +1626,8 @@ def queue_worker():
                     print("Unexpected error:", e)
                     time.sleep(2)
                     continue
+            if job_status_cache.get(job_id) == "cancelled":
+                break
         # Mark job completed
         conn = get_connection()
         cur = conn.cursor()
@@ -1591,6 +1640,7 @@ def queue_worker():
         cur.close()
         conn.close()
         job_queue.task_done()
+        
     worker_running = False
         # reuse your sender logic here
 # ================= START BOT ================= #
@@ -1598,6 +1648,8 @@ def queue_worker():
 if __name__ == "__main__":
     init_db()
     resume_jobs()   # ADD THIS LINE
+    clean_invalid_groups()  # ADD THIS LINE
     bot.remove_webhook()
+    
     print("Bot is running...")
     bot.infinity_polling(skip_pending=True)
