@@ -1352,6 +1352,7 @@ def queue_worker():
                         last_id = media_id  # ✅ correct last_id for single
 
                     live_jobs[job_id]["sent"] = sent
+                    rate_limit_hits = 0
                     # =====================
                     # SMART SAFE BREAK SYSTEM
                     # =====================
@@ -1457,6 +1458,14 @@ def queue_worker():
 
                         rate_limit_hits += 1
 
+                        if rate_limit_hits == 1:
+                            bot.send_message(
+                                current_group_id,
+                                f"⚠ Telegram rate limit detected!\n"
+                                f"📉 Slowing down sending speed.\n"
+                                f"⏳ Sleeping for {retry_after} seconds..."
+                            )
+
                         # Increase delay dynamically
                         extra_delay += 0.2  # add 0.2 sec more per hit
                         delay = base_delay + extra_delay
@@ -1464,12 +1473,12 @@ def queue_worker():
                         # Increase future pause duration
                         extra_pause_extension += 120  # add +2 min to next smart break
 
-                        bot.send_message(
-                            current_group_id,
-                            f"⚠ Telegram rate limit detected!\n"
-                            f"📉 Slowing down sending speed.\n"
-                            f"⏳ Sleeping for {retry_after} seconds..."
-                        )
+                        # bot.send_message(
+                        #     current_group_id,
+                        #     f"⚠ Telegram rate limit detected!\n"
+                        #     f"📉 Slowing down sending speed.\n"
+                        #     f"⏳ Sleeping for {retry_after} seconds..."
+                        # )
 
                         time.sleep(retry_after)
                         continue
@@ -1483,6 +1492,7 @@ def queue_worker():
                     print("Unexpected error:", e)
                     time.sleep(2)
                     continue
+        job_queue.task_done()
     worker_running = False
         # reuse your sender logic here
 # ================= START BOT ================= #
