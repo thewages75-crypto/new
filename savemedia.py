@@ -1002,7 +1002,7 @@ def callback_handler(call):
 
         bot.send_message(
             call.message.chat.id,
-            f"🚀 Sending Started\nFrom User: {username} To Group: {group_title}\nTotal files: {total_files}",
+            f"🚀 Sending Started\nTotal files: {total_files}",
             reply_markup=markup
         )
 
