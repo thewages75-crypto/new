@@ -1290,126 +1290,126 @@ def queue_worker():
 
                 # IMPORTANT:
                 last_id = items[-1][0]
-            try:    
-                # =====================
-                # ALBUM
-                # =====================
-                if len(items) > 1 and all(i[2] in ["photo", "video"] for i in items):
+                try:    
+                    # =====================
+                    # ALBUM
+                    # =====================
+                    if len(items) > 1 and all(i[2] in ["photo", "video"] for i in items):
 
-                    media_list = []
+                        media_list = []
 
-                    for index, (media_id, file_id, file_type, caption) in enumerate(items):
+                        for index, (media_id, file_id, file_type, caption) in enumerate(items):
+
+                            if file_type == "photo":
+                                if index == 0:
+                                    media_list.append(InputMediaPhoto(file_id, caption=caption))
+                                else:
+                                    media_list.append(InputMediaPhoto(file_id))
+
+                            elif file_type == "video":
+                                if index == 0:
+                                    media_list.append(InputMediaVideo(file_id, caption=caption))
+                                else:
+                                    media_list.append(InputMediaVideo(file_id))
+
+                        bot.send_media_group(current_group_id, media_list)
+
+                        sent += len(items)
+                        last_id = items[-1][0]  # ✅ correct last_id for album
+
+                    # =====================
+                    # SINGLE
+                    # =====================
+                    else:
+                        media_id, file_id, file_type, caption = items[0]
 
                         if file_type == "photo":
-                            if index == 0:
-                                media_list.append(InputMediaPhoto(file_id, caption=caption))
-                            else:
-                                media_list.append(InputMediaPhoto(file_id))
-
+                            bot.send_photo(current_group_id, file_id, caption=caption)
                         elif file_type == "video":
-                            if index == 0:
-                                media_list.append(InputMediaVideo(file_id, caption=caption))
-                            else:
-                                media_list.append(InputMediaVideo(file_id))
+                            bot.send_video(current_group_id, file_id, caption=caption)
+                        elif file_type == "document":
+                            bot.send_document(current_group_id, file_id, caption=caption)
+                        elif file_type == "audio":
+                            bot.send_audio(current_group_id, file_id, caption=caption)
 
-                    bot.send_media_group(current_group_id, media_list)
+                        sent += 1
+                        last_id = media_id  # ✅ correct last_id for single
 
-                    sent += len(items)
-                    last_id = items[-1][0]  # ✅ correct last_id for album
+                    live_jobs[job_id]["sent"] = sent
 
-                # =====================
-                # SINGLE
-                # =====================
-                else:
-                    media_id, file_id, file_type, caption = items[0]
+                    # =====================
+                    # PROGRESS UPDATE
+                    # =====================
+                    if sent % 5 == 0 or sent == total:
 
-                    if file_type == "photo":
-                        bot.send_photo(current_group_id, file_id, caption=caption)
-                    elif file_type == "video":
-                        bot.send_video(current_group_id, file_id, caption=caption)
-                    elif file_type == "document":
-                        bot.send_document(current_group_id, file_id, caption=caption)
-                    elif file_type == "audio":
-                        bot.send_audio(current_group_id, file_id, caption=caption)
+                        percent = int((sent / total) * 100)
+                        elapsed = time.time() - start_time
 
-                    sent += 1
-                    last_id = media_id  # ✅ correct last_id for single
+                        if sent > 0:
+                            avg_time = elapsed / sent
+                            remaining = total - sent
+                            eta_seconds = int(avg_time * remaining)
+                            speed = round(sent / elapsed, 2)
+                        else:
+                            eta_seconds = 0
+                            speed = 0
 
-                live_jobs[job_id]["sent"] = sent
+                        minutes = eta_seconds // 60
+                        seconds = eta_seconds % 60
+                        eta_text = f"{minutes}m {seconds}s" if eta_seconds > 0 else "calculating..."
 
-                # =====================
-                # PROGRESS UPDATE
-                # =====================
-                if sent % 5 == 0 or sent == total:
+                        bar = build_progress_bar(percent)
 
-                    percent = int((sent / total) * 100)
-                    elapsed = time.time() - start_time
+                        progress_text = (
+                            " Sending Media ⌯⌲\n\n"
+                            f"[{bar}] {percent}%\n\n"
+                            f"📊 {sent} / {total} files\n"
+                            f"⚡ Speed: {speed} files/sec\n"
+                            f"⏳ ETA: {eta_text}"
+                        )
 
-                    if sent > 0:
-                        avg_time = elapsed / sent
-                        remaining = total - sent
-                        eta_seconds = int(avg_time * remaining)
-                        speed = round(sent / elapsed, 2)
+                        bot.edit_message_text(
+                            progress_text,
+                            chat_id,
+                            progress_message.message_id
+                        )
+
+                    # =====================
+                    # UPDATE RESUME POSITION
+                    # =====================
+                    # Update resume position every 50 files
+                    if sent % 50 == 0 or sent == total:
+                        conn = get_connection()
+                        cur = conn.cursor()
+                        cur.execute("""
+                            UPDATE send_jobs
+                            SET last_sent_id = %s
+                            WHERE id = %s
+                        """, (last_id, job_id))
+                        conn.commit()
+                        cur.close()
+                        conn.close()
+
+                    time.sleep(delay)
+
+                except ApiTelegramException as e:
+                    if e.error_code == 429:
+                        retry_after = int(
+                            e.result_json.get("parameters", {}).get("retry_after", 5)
+                        )
+                        print(f"Rate limited. Sleeping for {retry_after} seconds.")
+                        time.sleep(retry_after)
+                        continue
                     else:
-                        eta_seconds = 0
-                        speed = 0
+                        print("Telegram API error:", e)
+                        time.sleep(2)
+                        continue
 
-                    minutes = eta_seconds // 60
-                    seconds = eta_seconds % 60
-                    eta_text = f"{minutes}m {seconds}s" if eta_seconds > 0 else "calculating..."
-
-                    bar = build_progress_bar(percent)
-
-                    progress_text = (
-                        " Sending Media ⌯⌲\n\n"
-                        f"[{bar}] {percent}%\n\n"
-                        f"📊 {sent} / {total} files\n"
-                        f"⚡ Speed: {speed} files/sec\n"
-                        f"⏳ ETA: {eta_text}"
-                    )
-
-                    bot.edit_message_text(
-                        progress_text,
-                        chat_id,
-                        progress_message.message_id
-                    )
-
-                # =====================
-                # UPDATE RESUME POSITION
-                # =====================
-                # Update resume position every 50 files
-                if sent % 50 == 0 or sent == total:
-                    conn = get_connection()
-                    cur = conn.cursor()
-                    cur.execute("""
-                        UPDATE send_jobs
-                        SET last_sent_id = %s
-                        WHERE id = %s
-                    """, (last_id, job_id))
-                    conn.commit()
-                    cur.close()
-                    conn.close()
-
-                time.sleep(delay)
-
-            except ApiTelegramException as e:
-                if e.error_code == 429:
-                    retry_after = int(
-                        e.result_json.get("parameters", {}).get("retry_after", 5)
-                    )
-                    print(f"Rate limited. Sleeping for {retry_after} seconds.")
-                    time.sleep(retry_after)
-                    continue
-                else:
-                    print("Telegram API error:", e)
+                except Exception as e:
+                    print("Unexpected error:", e)
                     time.sleep(2)
                     continue
-
-            except Exception as e:
-                print("Unexpected error:", e)
-                time.sleep(2)
-                continue
-        worker_running = False
+            worker_running = False
         # reuse your sender logic here
 # ================= START BOT ================= #
 
