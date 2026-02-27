@@ -7,7 +7,6 @@ import os
 import threading
 import time
 from queue import Queue
-import random
 from telebot.apihelper import ApiTelegramException
 # ================= CONFIG ================= #
 
@@ -234,19 +233,6 @@ def start(message):
         dashboard_text(message.from_user.id),
         reply_markup=dashboard_markup(message.from_user.id)
     )
-@bot.message_handler(commands=['reset_jobs'])
-def reset_jobs(message):
-    if message.from_user.id != ADMIN_ID:
-        return
-
-    conn = get_connection()
-    cur = conn.cursor()
-    cur.execute("UPDATE send_jobs SET is_active = FALSE WHERE is_active = TRUE")
-    conn.commit()
-    cur.close()
-    conn.close()
-
-    bot.send_message(message.chat.id, "All active jobs reset.")
 @bot.message_handler(func=lambda m: m.from_user.id == ADMIN_ID and m.from_user.id in admin_send_state)
 def admin_group_input(message):
     
@@ -340,21 +326,21 @@ def finalize_user_upload(user_id, chat_id):
 
     if session["duplicate"] > 0:
         text = (
-            f"⚔️ Upload Completed 🕷\n\n"
+            f"📦 Upload Completed\n\n"
             f"Total Sent: {session['total']}\n"
             f"✅ Saved: {session['saved']}\n"
             f"♻️ Skipped (Duplicates): {session['duplicate']}\n\n"
-            f"🗃️ Total Files: {total_files}\n"
-            f"🖼️ Total Photo Files: {session['photo']} \n"
+            f"📦 Total Files: {total_files}\n"
+            f"📦 Total Files: {total_files}\n"
             f"🎬 Total Video Files: {session['video']} \n"
             f"💾 Total Size: {total_size}"
         )
     else:
         text = (
-            f"⚔️ Upload Completed 🕷\n\n"
+            f"📦 Upload Completed\n\n"
             f"Total Sent: {session['total']}\n"
             f"✅ Saved: {session['saved']}\n\n"
-            f"🗃️ Total Files: {total_files}\n"
+            f"📦 Total Files: {total_files}\n"
             f"🎬 Total Video Files: {session['video']} \n"
             f"🖼️ Total Photo Files: {session['photo']} \n"
             f"💾 Total Size: {total_size}"
@@ -887,7 +873,7 @@ def callback_handler(call):
 
         bot.send_message(
             call.message.chat.id,
-            "📤 SELECT A GROUP OR ADD A NEW ONE:",
+            "📤 Select a previous group or add new one:",
             reply_markup=markup
         )
     elif data.startswith("use_group_"):
@@ -910,7 +896,7 @@ def callback_handler(call):
 
         bot.send_message(
             call.message.chat.id,
-            f"✅ Group selected: `{g_title}`\n\nPress the button below to start sending.",
+            f"✅ Group selected: `{group_id}`\n\nPress the button below to start sending.",
             parse_mode="Markdown",
             reply_markup=markup
         )
@@ -923,6 +909,7 @@ def callback_handler(call):
             "📩 Forward ANY message from target group\nOR send group ID."
         )
     elif data == "admin_confirm_send":
+
         if call.from_user.id not in admin_send_state:
             bot.answer_callback_query(call.id, "Session expired")
             return
@@ -932,17 +919,6 @@ def callback_handler(call):
         user_id = state["target_user"]
         group_id = state.get("group_id")
         speed = state.get("speed", 1)
-        # Get username safely
-        username = "Unknown"
-
-        conn = get_connection()
-        cur = conn.cursor()
-        cur.execute("SELECT username FROM users WHERE id = %s", (user_id,))
-        row = cur.fetchone()
-        if row and row[0]:
-            username = row[0]
-        cur.close()
-        conn.close()
         # fetch title safely
         try:
             chat = bot.get_chat(group_id)
@@ -959,13 +935,13 @@ def callback_handler(call):
         cur = conn.cursor()
 
         # Fetch media
-        # cur.execute("""
-        #     SELECT id, file_id, file_type, caption, media_group_id
-        #     FROM stored_media
-        #     WHERE user_id=%s
-        #     ORDER BY id ASC
-        # """, (user_id,))
-        # rows = cur.fetchall()
+        cur.execute("""
+            SELECT id, file_id, file_type, caption, media_group_id
+            FROM stored_media
+            WHERE user_id=%s
+            ORDER BY id ASC
+        """, (user_id,))
+        rows = cur.fetchall()
 
         # Create job
         cur.execute("""
@@ -981,9 +957,7 @@ def callback_handler(call):
             WHERE user_id = %s
         """, (user_id,))
         total_files = cur.fetchone()[0]
-        if total_files == 0:
-            bot.send_message(call.message.chat.id, "⚠ No media found.")
-            return
+
         # Save group history
         cur.execute("""
             INSERT INTO user_send_groups (target_user, group_id, group_title)
@@ -995,6 +969,9 @@ def callback_handler(call):
         conn.commit()
         cur.close()
         conn.close()
+        if not rows:
+            bot.send_message(call.message.chat.id, "⚠ No media found.")
+            return
         with job_status_lock:
             job_status_cache[job_id] = "running"
         job_queue.put({
@@ -1012,41 +989,17 @@ def callback_handler(call):
             InlineKeyboardButton("⏸ Pause", callback_data=f"pause_job_{job_id}"),
             InlineKeyboardButton("▶ Resume", callback_data=f"resume_job_{job_id}")
         )
-        markup.add(
-            InlineKeyboardButton("❌ Cancel", callback_data=f"cancel_job_{job_id}")
-        )
 
         bot.send_message(
             call.message.chat.id,
-            f"🚀 Sending Started\nTotal files: {total_files}",
+            f"🚀 Sending started\nTotal files: {len(rows)}",
             reply_markup=markup
         )
 
         
 
         admin_send_state.pop(call.from_user.id, None)
-    elif data.startswith("cancel_job_"):
-
-        job_id = int(data.split("_")[-1])
-
-        # Mark job as cancelled
-        conn = get_connection()
-        cur = conn.cursor()
-        cur.execute("""
-            UPDATE send_jobs
-            SET is_active = FALSE
-            WHERE id = %s
-        """, (job_id,))
-        conn.commit()
-        cur.close()
-        conn.close()
-
-        # Update memory status
-        with job_status_lock:
-            job_status_cache[job_id] = "cancelled"
-
-        bot.answer_callback_query(call.id, "Job cancelled.")
-        bot.send_message(call.message.chat.id, "❌ Sending cancelled successfully.")    
+    
     elif data == "menu_files":
         bot.edit_message_text(
             "📂 Select Category",
@@ -1220,22 +1173,19 @@ def resume_jobs():
             group_title = chat.title
         except:
             group_title = str(group_id)
-        # Get remaining file count only
         conn = get_connection()
         cur = conn.cursor()
-
         cur.execute("""
-            SELECT COUNT(*)
+            SELECT id, file_id, file_type, caption, media_group_id
             FROM stored_media
-            WHERE user_id = %s AND id > %s
+            WHERE user_id=%s AND id > %s
+            ORDER BY id ASC
         """, (target_user, last_sent_id))
-
-        remaining = cur.fetchone()[0]
-
+        rows = cur.fetchall()
         cur.close()
         conn.close()
 
-        if remaining == 0:
+        if not rows:
             continue
 
         with job_status_lock:
@@ -1247,7 +1197,7 @@ def resume_jobs():
             "group_title": group_title,
             "target_user": target_user,
             "speed": 1,
-            "total": remaining,
+            "total": len(rows),
             "chat_id": ADMIN_ID
         })
 
@@ -1272,15 +1222,15 @@ def queue_worker():
         try:
             job = job_queue.get(timeout=1)
         except:
-            continue
+            break
 
         total = job["total"]
         chat_id = job["chat_id"]
         job_id = job["job_id"]
         group_id = job["group_id"]
-        delay = job.get("speed", 2.5)
+        delay = job.get("speed", 1)
 
-        
+        start_time = time.time()
         progress_message = bot.send_message(chat_id, "📤 Sending started...")
         live_jobs[job_id] = {
             "sent": 0,
@@ -1291,28 +1241,12 @@ def queue_worker():
             "chat_id": chat_id,
         }
         sent = 0
-        start_time = time.time()
-        # ===== Adaptive Rate Control =====
-        rate_limit_hits = 0
-        base_delay = delay
-        extra_delay = 0
-        extra_pause_extension = 0
-        safe_break_interval = 600   # pause every 1000 files
         # Group media
         target_user = job["target_user"]
-        # Get resume position from DB
-        conn = get_connection()
-        cur = conn.cursor()
-        cur.execute("SELECT last_sent_id FROM send_jobs WHERE id = %s", (job_id,))
-        last_id = cur.fetchone()[0] or 0
-        cur.close()
-        conn.close()
-        batch_size = 2000
+        last_id = 0
+        batch_size = 500
 
         while True:
-            if job_status_cache.get(job_id) == "cancelled":
-                print("Job cancelled before next batch.")
-                break
 
             # Fetch next batch
             conn = get_connection()
@@ -1345,10 +1279,6 @@ def queue_worker():
                     ]
 
             for group_key, items in grouped.items():
-                # Check for cancellation
-                if job_status_cache.get(job_id) == "cancelled":
-                    print("Job cancelled by admin.")
-                    break
 
                 while job_status_cache[job_id] == "paused":
                     time.sleep(1)
@@ -1359,6 +1289,7 @@ def queue_worker():
                 # (use your try/except block here)
 
                 # IMPORTANT:
+                last_id = items[-1][0]
                 try:    
                     # =====================
                     # ALBUM
@@ -1405,49 +1336,11 @@ def queue_worker():
                         last_id = media_id  # ✅ correct last_id for single
 
                     live_jobs[job_id]["sent"] = sent
-                    rate_limit_hits = 0
-                    # =====================
-                    # SMART SAFE BREAK SYSTEM
-                    # =====================
-                    if sent > 0 and sent % safe_break_interval == 0:
-
-                        elapsed = time.time() - start_time
-
-                        if elapsed > 0:
-                            current_speed = sent / elapsed  # files per second
-                        else:
-                            current_speed = 0
-
-                        # Base pause: 5 minutes
-                        pause_time = 360 + extra_pause_extension
-
-                        # Dynamic adjustment
-                        if current_speed > 2:
-                            pause_time += 1200   # +20 minutes
-                        elif current_speed > 1:
-                            pause_time += 600    # +10 minutes
-                        elif current_speed > 0.5:
-                            pause_time += 300    # +5 minutes
-
-                        # Cap pause between 5–30 minutes
-                        pause_time = max(300, min(pause_time, 1800))
-
-                        bot.send_message(
-                            current_group_id,
-                            f"📢 Progress Update\n\n"
-                            f"✅ {sent} media sent.\n"
-                            f"⚡ Speed: {round(current_speed,2)} files/sec\n"
-                            f"⏸ Smart safety pause activated.\n"
-                            f"⏳ Resuming in {pause_time//60} minutes..."
-                        )
-
-                        time.sleep(pause_time)
-                        extra_pause_extension = 0 # reset extra extension after break
 
                     # =====================
                     # PROGRESS UPDATE
                     # =====================
-                    if sent % 10 == 0 or sent == total:
+                    if sent % 5 == 0 or sent == total:
 
                         percent = int((sent / total) * 100)
                         elapsed = time.time() - start_time
@@ -1496,35 +1389,16 @@ def queue_worker():
                         conn.commit()
                         cur.close()
                         conn.close()
-                    # Gradual recovery if stable
-                    if rate_limit_hits == 0 and extra_delay > 0:
-                        extra_delay = max(0, extra_delay - 0.05)
-                        delay = base_delay + extra_delay
+
                     time.sleep(delay)
 
                 except ApiTelegramException as e:
                     if e.error_code == 429:
-
                         retry_after = int(
                             e.result_json.get("parameters", {}).get("retry_after", 5)
                         )
-
-                        rate_limit_hits += 1
-
-                        # Increase delay dynamically
-                        extra_delay += 0.2
-                        delay = base_delay + extra_delay
-
-                        # Increase future pause duration
-                        extra_pause_extension += 120
-
-                        # IMPORTANT: DO NOT SEND ANY MESSAGE HERE
-                        # Respect Telegram first
+                        print(f"Rate limited. Sleeping for {retry_after} seconds.")
                         time.sleep(retry_after)
-
-                        # Optional: log only to console
-                        print(f"Rate limited. Slept {retry_after}s. New delay: {delay}")
-
                         continue
                     else:
                         print("Telegram API error:", e)
@@ -1535,21 +1409,7 @@ def queue_worker():
                     print("Unexpected error:", e)
                     time.sleep(2)
                     continue
-        # Mark job completed
-        conn = get_connection()
-        cur = conn.cursor()
-        cur.execute("""
-            UPDATE send_jobs
-            SET is_active = FALSE
-            WHERE id = %s
-        """, (job_id,))
-        conn.commit()
-        cur.close()
-        conn.close()
-        job_queue.task_done()
-        with job_status_lock:
-            job_status_cache.pop(job_id, None)
-    worker_running = False
+            worker_running = False
         # reuse your sender logic here
 # ================= START BOT ================= #
 
