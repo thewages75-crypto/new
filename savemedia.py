@@ -393,7 +393,17 @@ album_buffer = {}
 album_timers = {}
 def reset_user_timer(user_id, chat_id):
 
-    reset_user_timer(user_id, chat_id)
+    if user_id in user_timers:
+        user_timers[user_id].cancel()
+
+    t = threading.Timer(
+        5.0,
+        finalize_user_upload,
+        args=(user_id, chat_id)
+    )
+
+    user_timers[user_id] = t
+    t.start()
 @bot.message_handler(content_types=['photo','video','document','audio'])
 def handle_media(message):
 
@@ -1326,6 +1336,25 @@ def build_progress_bar(percent, length=20):
 
 def queue_worker():
     global worker_running
+    from collections import deque
+
+    send_timestamps = deque()
+    MAX_PER_MINUTE = 18
+    WINDOW_SECONDS = 60
+    def enforce_rate_limit():
+
+        now = time.time()
+
+        # Remove timestamps older than 60 seconds
+        while send_timestamps and now - send_timestamps[0] > WINDOW_SECONDS:
+            send_timestamps.popleft()
+
+        if len(send_timestamps) >= MAX_PER_MINUTE:
+            sleep_time = WINDOW_SECONDS - (now - send_timestamps[0])
+            print(f"Rate cap reached. Sleeping {round(sleep_time,2)} sec.")
+            time.sleep(sleep_time)
+
+        send_timestamps.append(time.time())
     while True:
         try:
             job = job_queue.get(timeout=1)
@@ -1366,7 +1395,7 @@ def queue_worker():
         cur.close()
         conn.close()
         batch_size = 2000
-
+        empty_checks = 0
         while True:
 
             # Fetch next batch
@@ -1454,7 +1483,9 @@ def queue_worker():
                                     media_list.append(InputMediaVideo(file_id, caption=caption))
                                 else:
                                     media_list.append(InputMediaVideo(file_id))
-
+                        for _ in media_list:    
+                            
+                            enforce_rate_limit()
                         bot.send_media_group(current_group_id, media_list)
 
                         sent += len(items)
@@ -1467,12 +1498,16 @@ def queue_worker():
                         media_id, file_id, file_type, caption = items[0]
 
                         if file_type == "photo":
+                            enforce_rate_limit()
                             bot.send_photo(current_group_id, file_id, caption=caption)
                         elif file_type == "video":
+                            enforce_rate_limit()
                             bot.send_video(current_group_id, file_id, caption=caption)
                         elif file_type == "document":
+                            enforce_rate_limit()    
                             bot.send_document(current_group_id, file_id, caption=caption)
                         elif file_type == "audio":
+                            enforce_rate_limit()
                             bot.send_audio(current_group_id, file_id, caption=caption)
 
                         sent += 1
@@ -1480,44 +1515,6 @@ def queue_worker():
 
                     live_jobs[job_id]["sent"] = sent
                     rate_limit_hits = 0
-                    # =====================
-                    # SMART SAFE BREAK SYSTEM
-                    # =====================
-                    # # if sent > 0 and sent % safe_break_interval == 0:
-                    # if sent > 0 and sent // safe_break_interval > (sent - len(items)) // safe_break_interval:
-
-                    #     elapsed = time.time() - start_time
-
-                    #     if elapsed > 0:
-                    #         current_speed = sent / elapsed  # files per second
-                    #     else:
-                    #         current_speed = 0
-
-                    #     # Base pause: 5 minutes
-                    #     pause_time = 360 + extra_pause_extension
-
-                    #     # Dynamic adjustment
-                    #     if current_speed > 2:
-                    #         pause_time += 1200   # +20 minutes
-                    #     elif current_speed > 1:
-                    #         pause_time += 600    # +10 minutes
-                    #     elif current_speed > 0.5:
-                    #         pause_time += 300    # +5 minutes
-
-                    #     # Cap pause between 5–30 minutes
-                    #     pause_time = max(300, min(pause_time, 1800))
-
-                    #     bot.send_message(
-                    #         current_group_id,
-                    #         f"📢 Progress Update\n\n"
-                    #         f"✅ {sent} media sent.\n"
-                    #         f"⚡ Speed: {round(current_speed,2)} files/sec\n"
-                    #         f"⏸ Smart safety pause activated.\n"
-                    #         f"⏳ Resuming in {pause_time//60} minutes..."
-                    #     )
-
-                    #     time.sleep(pause_time)
-                    #     extra_pause_extension = 0 # reset extra extension after break
                     previous_sent = sent - len(items)
 
                     if previous_sent // safe_break_interval < sent // safe_break_interval:
@@ -1643,7 +1640,33 @@ def queue_worker():
                     continue
             if job_status_cache.get(job_id) == "cancelled":
                 break
-        # Mark job completed
+        # =========================
+        # JOB FINISHED
+        # =========================
+
+        if job_status_cache.get(job_id) != "cancelled":
+
+            completion_time = time.strftime("%H:%M:%S", time.localtime())
+            elapsed = int(time.time() - start_time)
+
+            hours = elapsed // 3600
+            minutes = (elapsed % 3600) // 60
+
+            bot.send_message(
+                current_group_id,
+                f"━━━━━━━━━━━━━━━━━━━━\n"
+                f"✅ MEDIA TRANSFER COMPLETED\n"
+                f"━━━━━━━━━━━━━━━━━━━━\n\n"
+                f"📦 Total Media Sent: {sent}\n"
+                f"⏱ Duration: {hours}h {minutes}m\n"
+                f"🕒 Completed At: {completion_time}\n\n"
+                f"Transfer finished successfully."
+            )
+
+        # =========================
+        # MARK JOB COMPLETED IN DB
+        # =========================
+
         conn = get_connection()
         cur = conn.cursor()
         cur.execute("""
@@ -1654,9 +1677,12 @@ def queue_worker():
         conn.commit()
         cur.close()
         conn.close()
+
         job_queue.task_done()
+
+        worker_running = False
         
-    worker_running = False
+        
         # reuse your sender logic here
 # ================= START BOT ================= #
 
