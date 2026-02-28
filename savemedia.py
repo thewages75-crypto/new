@@ -481,7 +481,7 @@ def handle_media(message):
 
             reset_user_timer(user_id, message.chat.id)
         # Start timer properly with argument
-        t = threading.Timer(1.2, finalize_album, args=(media_group_id,))
+        t = threading.Timer(3.0, finalize_album, args=(media_group_id,))
         album_timers[media_group_id] = t
         t.start()
     else:
@@ -514,8 +514,9 @@ def handle_media(message):
             # reset timer
             if user_id in user_timers:
                 user_timers[user_id].cancel()
+            # Start new timer to finalize also there is timer for album, too
             t = threading.Timer(
-                2.0,
+                5.0,
                 finalize_user_upload,
                 args=(user_id, message.chat.id)
             )
@@ -1384,8 +1385,16 @@ def queue_worker():
             conn.close()
 
             if not rows:
-                break
 
+                empty_checks += 1
+
+                if empty_checks >= 6:   # 6 × 5 seconds = 30 seconds idle
+                    break
+
+                time.sleep(5)
+                continue
+            else:
+                empty_checks = 0
             grouped = {}
 
             for media_id, file_id, file_type, caption, media_group_id in rows:
