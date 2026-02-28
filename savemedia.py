@@ -1341,28 +1341,19 @@ def queue_worker():
     send_timestamps = deque()
     MAX_PER_MINUTE = 18
     WINDOW_SECONDS = 60
+    last_send_time = 0
+    MIN_INTERVAL = 60 / 18  # 3.33 seconds
     def enforce_rate_limit():
+        nonlocal last_send_time
+
         now = time.time()
+        elapsed = now - last_send_time
 
-        # Remove expired timestamps
-        while send_timestamps and now - send_timestamps[0] >= WINDOW_SECONDS:
-            send_timestamps.popleft()
+        if elapsed < MIN_INTERVAL:
+            sleep_time = MIN_INTERVAL - elapsed
+            time.sleep(sleep_time)
 
-        if len(send_timestamps) >= MAX_PER_MINUTE:
-
-            oldest = send_timestamps[0]
-            sleep_time = WINDOW_SECONDS - (now - oldest)
-
-            if sleep_time > 0:
-                print(f"Rate cap reached. Sleeping {round(sleep_time,2)} sec.")
-                time.sleep(sleep_time)
-
-            # After sleeping, clean again properly
-            now = time.time()
-            while send_timestamps and now - send_timestamps[0] >= WINDOW_SECONDS:
-                send_timestamps.popleft()
-
-        send_timestamps.append(time.time())
+        last_send_time = time.time()
     while True:
         try:
             job = job_queue.get(timeout=1)
@@ -1510,6 +1501,16 @@ def queue_worker():
                         sent += len(items)
                         last_id = items[-1][0]  # ✅ correct last_id for album
 
+                        # 🔹 Update progress every 100
+                        if sent % 100 == 0:
+                            total = get_total_files(target_user)
+
+                            bot.send_message(
+                                current_group_id,
+                                f"📊 Progress Update\n\n"
+                                f"Sent: {sent}\n"
+                                f"Total So Far: {total}"
+                            )
                     # =====================
                     # SINGLE
                     # =====================
@@ -1530,7 +1531,18 @@ def queue_worker():
                             bot.send_audio(current_group_id, file_id, caption=caption)
 
                         sent += 1
-                        last_id = media_id  # ✅ correct last_id for single
+                        last_id = media_id 
+
+                        # 🔹 Update progress every 100
+                        if sent % 100 == 0:
+                            total = get_total_files(target_user)
+
+                            bot.send_message(
+                                current_group_id,
+                                f"📊 Progress Update\n\n"
+                                f"Sent: {sent}\n"
+                                f"Total So Far: {total}"
+                            )# ✅ correct last_id for single
 
                     live_jobs[job_id]["sent"] = sent
                     rate_limit_hits = 0
