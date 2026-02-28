@@ -1456,7 +1456,18 @@ def queue_worker():
 
                     with job_status_lock:
                         job_status_cache[job_id] = "cancelled"
-
+                    job_info = live_jobs.get(job_id, {})
+                    if job_info:
+                        try:
+                            bot.edit_message_text(
+                                "❌ Media Transfer Cancelled\n\n"
+                                "Reason: The bot was removed from the target group.\n\n"
+                                "Please add the bot back and start again.",
+                                job_info["chat_id"],
+                                job_info["message_id"]
+                            )
+                        except Exception as e:
+                            print(f"Error editing message: {e}")
                     break
                 # Sending logic stays same as before
                 # (use your try/except block here)
