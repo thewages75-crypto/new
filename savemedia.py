@@ -1333,7 +1333,7 @@ def build_progress_bar(percent, length=20):
     filled = int(length * percent / 100)
     empty = length - filled
     return "█" * filled + "░" * empty
-
+ 
 def queue_worker():
     global worker_running
     from collections import deque
@@ -1342,17 +1342,25 @@ def queue_worker():
     MAX_PER_MINUTE = 18
     WINDOW_SECONDS = 60
     def enforce_rate_limit():
-
         now = time.time()
 
-        # Remove timestamps older than 60 seconds
-        while send_timestamps and now - send_timestamps[0] > WINDOW_SECONDS:
+        # Remove expired timestamps
+        while send_timestamps and now - send_timestamps[0] >= WINDOW_SECONDS:
             send_timestamps.popleft()
 
         if len(send_timestamps) >= MAX_PER_MINUTE:
-            sleep_time = WINDOW_SECONDS - (now - send_timestamps[0])
-            print(f"Rate cap reached. Sleeping {round(sleep_time,2)} sec.")
-            time.sleep(sleep_time)
+
+            oldest = send_timestamps[0]
+            sleep_time = WINDOW_SECONDS - (now - oldest)
+
+            if sleep_time > 0:
+                print(f"Rate cap reached. Sleeping {round(sleep_time,2)} sec.")
+                time.sleep(sleep_time)
+
+            # After sleeping, clean again properly
+            now = time.time()
+            while send_timestamps and now - send_timestamps[0] >= WINDOW_SECONDS:
+                send_timestamps.popleft()
 
         send_timestamps.append(time.time())
     while True:
