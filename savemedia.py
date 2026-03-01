@@ -8,12 +8,19 @@ import threading
 import time
 from queue import Queue
 import random
+from psycopg2.pool import SimpleConnectionPool
 from telebot.apihelper import ApiTelegramException
 # ================= CONFIG ================= #
 
 BOT_TOKEN = "8606303101:AAGw3fHdI5jpZOOuFCSoHlPKb1Urj4Oidk4"
 # DATABASE_URL = "YOUR_POSTGRES_URL"
 DATABASE_URL = os.getenv("DATABASE_URL")
+# ================= DATABASE POOL ================= #
+db_pool = SimpleConnectionPool(
+    1,   # minimum connections
+    20,  # maximum connections
+    dsn=DATABASE_URL
+)
 ADMIN_ID = 8305774350  # Your Telegram ID
 user_sessions = {}
 user_timers = {}
@@ -32,8 +39,11 @@ worker_running = False
 # ================= DATABASE ================= #
 
 def get_connection():
-    return psycopg2.connect(DATABASE_URL)
+    return db_pool.getconn()
 
+def release_connection(conn):
+    db_pool.putconn(conn)
+    
 def init_db():
     conn = get_connection()
     cur = conn.cursor()
@@ -96,7 +106,7 @@ def init_db():
 
     conn.commit()
     cur.close()
-    conn.close()
+    release_connection(conn)
     
 # ================= ADMIN PANEL Helper ================= #
 
@@ -130,7 +140,7 @@ def get_users_page(page):
     users = cur.fetchall()
 
     cur.close()
-    conn.close()
+    release_connection(conn)
 
     return users
 def validate_group(group_id):
@@ -152,7 +162,7 @@ def clean_invalid_groups():
     cur.execute("SELECT group_id FROM user_send_groups")
     groups = cur.fetchall()
     cur.close()
-    conn.close()
+    release_connection(conn)
 
     for (g_id,) in groups:
         if not validate_group(g_id):
@@ -167,14 +177,14 @@ def remove_group_from_db(group_id):
     """, (group_id,))
     conn.commit()
     cur.close()
-    conn.close()
+    release_connection(conn)
 def get_total_storage():
     conn = get_connection()
     cur = conn.cursor()
     cur.execute("SELECT COALESCE(SUM(file_size), 0) FROM stored_media")
     total_size = cur.fetchone()[0]
     cur.close()
-    conn.close()
+    release_connection(conn)
     return total_size
 # ================= DB HELPERS ================= #
 def get_storage_used(user_id):
@@ -186,7 +196,7 @@ def get_storage_used(user_id):
     )
     total_size = cur.fetchone()[0]
     cur.close()
-    conn.close()
+    release_connection(conn)
     return total_size
 def format_size(size):
     for unit in ['B', 'KB', 'MB', 'GB']:
@@ -203,7 +213,7 @@ def save_user(user):
     )
     conn.commit()
     cur.close()
-    conn.close()
+    release_connection(conn)
 
 def save_media(user_id, file_id, file_type, caption, file_size, media_group_id=None):
     conn = get_connection()
@@ -221,7 +231,7 @@ def save_media(user_id, file_id, file_type, caption, file_size, media_group_id=N
     result = cur.fetchone()
     conn.commit()
     cur.close()
-    conn.close()
+    release_connection(conn)
 
     return result[0]  # True if inserted, False if duplicate
 def get_total_files(user_id):
@@ -230,7 +240,7 @@ def get_total_files(user_id):
     cur.execute("SELECT COUNT(*) FROM stored_media WHERE user_id = %s", (user_id,))
     count = cur.fetchone()[0]
     cur.close()
-    conn.close()
+    release_connection(conn)
     return count
 
 def get_category_counts(user_id):
@@ -244,7 +254,7 @@ def get_category_counts(user_id):
     """, (user_id,))
     rows = cur.fetchall()
     cur.close()
-    conn.close()
+    release_connection(conn)
     return dict(rows)
 
 # ================= DASHBOARD ================= #
@@ -254,7 +264,7 @@ def get_total_duplicates():
     cur.execute("SELECT COALESCE(SUM(duplicate_count),0) FROM stored_media")
     total = cur.fetchone()[0]
     cur.close()
-    conn.close()
+    release_connection(conn)
     return total
 def get_user_duplicates(user_id):
     conn = get_connection()
@@ -266,7 +276,7 @@ def get_user_duplicates(user_id):
     """, (user_id,))
     total = cur.fetchone()[0]
     cur.close()
-    conn.close()
+    release_connection(conn)
     return total
 def dashboard_text(user_id):
     total_files = get_total_files(user_id)
@@ -323,7 +333,7 @@ def admin_group_input(message):
         """, (group_id, job_id))
         conn.commit()
         cur.close()
-        conn.close()
+        release_connection(conn)
 
         bot.send_message(
             message.chat.id,
@@ -589,7 +599,7 @@ def category_page(user_id, file_type, page):
 
     rows = cur.fetchall()
     cur.close()
-    conn.close()
+    release_connection(conn)
 
     markup = InlineKeyboardMarkup()
 
@@ -647,7 +657,7 @@ def callback_handler(call):
         cur.execute("SELECT COUNT(*) FROM stored_media")
         total_files = cur.fetchone()[0]
         cur.close()
-        conn.close()
+        release_connection(conn)
         total_size = format_size(get_total_storage())
         bot.edit_message_text(
             f"📊 Bot Statistics\n\n"
@@ -667,7 +677,7 @@ def callback_handler(call):
         cur.execute("SELECT COUNT(*) FROM users")
         total_users = cur.fetchone()[0]
         cur.close()
-        conn.close()
+        release_connection(conn)
         bot.edit_message_text(
             f"👥 Total Users: {total_users}",
             call.message.chat.id,
@@ -716,7 +726,7 @@ def callback_handler(call):
         daily_uploads = cur.fetchall()
 
         cur.close()
-        conn.close()
+        release_connection(conn)
 
         # Format results
         text = "📊 STORAGE ANALYTICS\n\n"
@@ -753,7 +763,7 @@ def callback_handler(call):
         cur.execute("SELECT COUNT(*) FROM stored_media")
         total_files = cur.fetchone()[0]
         cur.close()
-        conn.close()
+        release_connection(conn)
         bot.edit_message_text(
             f"📦 Total Files: {total_files}",
             call.message.chat.id,
@@ -921,7 +931,7 @@ def callback_handler(call):
         """, (target_user,))
         groups = cur.fetchall()
         cur.close()
-        conn.close()
+        release_connection(conn)
 
         markup = InlineKeyboardMarkup()
 
@@ -1005,7 +1015,7 @@ def callback_handler(call):
         if row and row[0]:
             username = row[0]
         cur.close()
-        conn.close()
+        release_connection(conn)
         # fetch title safely
         try:
             chat = bot.get_chat(group_id)
@@ -1057,7 +1067,7 @@ def callback_handler(call):
 
         conn.commit()
         cur.close()
-        conn.close()
+        release_connection(conn)
         with job_status_lock:
             job_status_cache[job_id] = "running"
         job_queue.put({
@@ -1224,7 +1234,7 @@ def callback_handler(call):
         """, (job_id,))
         conn.commit()
         cur.close()
-        conn.close()
+        release_connection(conn)
 
         job = live_jobs.get(job_id)
 
@@ -1248,7 +1258,7 @@ def callback_handler(call):
         )
         result = cur.fetchone()
         cur.close()
-        conn.close()
+        release_connection(conn)
 
         if result:
             file_id = result[0]
@@ -1285,7 +1295,7 @@ def stats(message):
     new_users_today = cur.fetchone()[0]
 
     cur.close()
-    conn.close()
+    release_connection(conn)
 
     bot.reply_to(
         message,
@@ -1306,7 +1316,7 @@ def resume_jobs():
     """)
     jobs = cur.fetchall()
     cur.close()
-    conn.close()
+    release_connection(conn)
 
     for job_id, target_user, group_id, last_sent_id in jobs:
         try:
@@ -1327,7 +1337,7 @@ def resume_jobs():
         remaining = cur.fetchone()[0]
 
         cur.close()
-        conn.close()
+        release_connection(conn)
 
         if remaining == 0:
             continue
@@ -1418,7 +1428,7 @@ def queue_worker():
         cur.execute("SELECT last_sent_id FROM send_jobs WHERE id = %s", (job_id,))
         last_id = cur.fetchone()[0] or 0
         cur.close()
-        conn.close()
+        release_connection(conn)
         batch_size = 2000
         empty_checks = 0
         while True:
@@ -1436,7 +1446,7 @@ def queue_worker():
 
             rows = cur.fetchall()
             cur.close()
-            conn.close()
+            release_connection(conn)
 
             if not rows:
 
@@ -1655,7 +1665,7 @@ def queue_worker():
                         """, (last_id, job_id))
                         conn.commit()
                         cur.close()
-                        conn.close()
+                        release_connection(conn)
                     # Gradual recovery if stable
                     if rate_limit_hits == 0 and extra_delay > 0:
                         extra_delay = max(0, extra_delay - 0.05)
@@ -1733,7 +1743,7 @@ def queue_worker():
         """, (job_id,))
         conn.commit()
         cur.close()
-        conn.close()
+        release_connection(conn)
 
         job_queue.task_done()
 
@@ -1742,7 +1752,12 @@ def queue_worker():
         
         # reuse your sender logic here
 # ================= START BOT ================= #
+import atexit
 
+@atexit.register
+def close_pool():
+    if db_pool:
+        db_pool.closeall()
 if __name__ == "__main__":
     init_db()
     resume_jobs()   # ADD THIS LINE
