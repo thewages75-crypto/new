@@ -87,6 +87,10 @@ def init_db():
         ALTER TABLE user_send_groups
         ADD COLUMN IF NOT EXISTS group_title TEXT;
     """)
+    cur.execute("""
+        ALTER TABLE stored_media
+        ADD COLUMN IF NOT EXISTS duplicate_count BIGINT DEFAULT 0
+    """)
     cur.execute("CREATE INDEX IF NOT EXISTS idx_user_media ON stored_media(user_id);")
     cur.execute("CREATE INDEX IF NOT EXISTS idx_saved_at ON stored_media(saved_at);")
 
@@ -209,8 +213,9 @@ def save_media(user_id, file_id, file_type, caption, file_size, media_group_id=N
         INSERT INTO stored_media
         (user_id, file_id, file_type, caption, file_size, media_group_id)
         VALUES (%s,%s,%s,%s,%s,%s)
-        ON CONFLICT (user_id, file_id) DO NOTHING
-        RETURNING id;
+        ON CONFLICT (user_id, file_id)
+        DO UPDATE SET duplicate_count = stored_media.duplicate_count + 1
+        RETURNING xmax = 0;
     """, (user_id, file_id, file_type, caption, file_size, media_group_id))
 
     result = cur.fetchone()
@@ -218,7 +223,7 @@ def save_media(user_id, file_id, file_type, caption, file_size, media_group_id=N
     cur.close()
     conn.close()
 
-    return result is not None
+    return result[0]  # True if inserted, False if duplicate
 def get_total_files(user_id):
     conn = get_connection()
     cur = conn.cursor()
@@ -243,7 +248,26 @@ def get_category_counts(user_id):
     return dict(rows)
 
 # ================= DASHBOARD ================= #
-
+def get_total_duplicates():
+    conn = get_connection()
+    cur = conn.cursor()
+    cur.execute("SELECT COALESCE(SUM(duplicate_count),0) FROM stored_media")
+    total = cur.fetchone()[0]
+    cur.close()
+    conn.close()
+    return total
+def get_user_duplicates(user_id):
+    conn = get_connection()
+    cur = conn.cursor()
+    cur.execute("""
+        SELECT COALESCE(SUM(duplicate_count),0)
+        FROM stored_media
+        WHERE user_id = %s
+    """, (user_id,))
+    total = cur.fetchone()[0]
+    cur.close()
+    conn.close()
+    return total
 def dashboard_text(user_id):
     total_files = get_total_files(user_id)
     total_size = format_size(get_storage_used(user_id))
@@ -788,10 +812,12 @@ def callback_handler(call):
 
         total = get_total_files(user_id)
         cats = get_category_counts(user_id)
+        duplicates = get_user_duplicates(user_id)
 
         text = (
             f"👤 User ID: {user_id}\n\n"
             f"📦 Total Files: {total}\n"
+            f"♻️ Duplicates: {duplicates}\n"
             f"💾 Storage Used: {format_size(get_storage_used(user_id))}\n\n"
             f"📷 Photos: {cats.get('photo',0)}\n"
             f"🎥 Videos: {cats.get('video',0)}\n"
