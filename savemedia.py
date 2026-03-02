@@ -279,6 +279,7 @@ def get_user_duplicates(user_id):
     release_connection(conn)
     return total
 def dashboard_text(user_id):
+    print("User total files:", total_files)
     total_files = get_total_files(user_id)
     total_size = format_size(get_storage_used(user_id))
     if total_files == 0:
@@ -1746,8 +1747,7 @@ def queue_worker():
         release_connection(conn)
 
         job_queue.task_done()
-
-        worker_running = False
+        continue
         
         
         # reuse your sender logic here
