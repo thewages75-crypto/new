@@ -1372,6 +1372,7 @@ def build_progress_bar(percent, length=20):
     return "█" * filled + "░" * empty
  
 def queue_worker():
+    print("Worker started")
     global worker_running
     from collections import deque
 
@@ -1568,6 +1569,7 @@ def queue_worker():
                             bot.send_audio(current_group_id, file_id, caption=caption)
 
                         sent += 1
+                        print("Sent count:", sent)
                         last_id = media_id 
 
                         # 🔹 Update progress every 100
