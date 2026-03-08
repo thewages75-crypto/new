@@ -12,7 +12,7 @@ from psycopg2.pool import SimpleConnectionPool
 from telebot.apihelper import ApiTelegramException
 # ================= CONFIG ================= #
 
-BOT_TOKEN = "8606303101:AAGw3fHdI5jpZOOuFCSoHlPKb1Urj4Oidk4"
+BOT_TOKEN = "7858154079:AAFfAPLPt9cXk3ztcSx1XmrDCn-57zVy9wM"
 # DATABASE_URL = "YOUR_POSTGRES_URL"
 DATABASE_URL = os.getenv("DATABASE_URL")
 # ================= DATABASE POOL ================= #
@@ -119,6 +119,8 @@ def admin_panel_markup():
     markup.add(InlineKeyboardButton("👥 Total Users", callback_data="admin_users"))
     markup.add(InlineKeyboardButton("📦 Total Files", callback_data="admin_files"))
     markup.add(InlineKeyboardButton("👤 View Users", callback_data="admin_userlist_0"))
+    markup.add(InlineKeyboardButton("📤 Export Media DB", callback_data="admin_export_db"))
+    markup.add(InlineKeyboardButton("📥 Import Media DB", callback_data="admin_import_db"))
     markup.add(InlineKeyboardButton("📊 Storage Analytics", callback_data="admin_analytics"))
     markup.add(InlineKeyboardButton("🔙 Back", callback_data="menu_main"))
     return markup
@@ -156,6 +158,7 @@ def validate_group(group_id):
 
     except Exception:
         return False
+
 def clean_invalid_groups():
     conn = get_connection()
     cur = conn.cursor()
@@ -443,7 +446,73 @@ def reset_user_timer(user_id, chat_id):
 
     user_timers[user_id] = t
     t.start()
-@bot.message_handler(content_types=['photo','video','document','audio'])
+@bot.message_handler(content_types=['document'])
+def import_db_file(message):
+
+    if message.from_user.id != ADMIN_ID:
+        return
+
+    if not message.document.file_name.endswith(".json"):
+        return
+
+    import json
+
+    file_info = bot.get_file(message.document.file_id)
+    file_data = bot.download_file(file_info.file_path)
+
+    data = json.loads(file_data.decode("utf-8"))
+
+    conn = get_connection()
+    cur = conn.cursor()
+
+    inserted = 0
+
+    for item in data:
+
+        try:
+
+            # insert user first
+            cur.execute("""
+                INSERT INTO users (user_id, username)
+                VALUES (%s,%s)
+                ON CONFLICT (user_id)
+                DO UPDATE SET username = EXCLUDED.username
+            """, (
+                item["user_id"],
+                item["username"]
+            ))
+
+            # insert media
+            cur.execute("""
+                INSERT INTO stored_media
+                (user_id, file_id, file_type, caption, file_size, media_group_id, duplicate_count)
+                VALUES (%s,%s,%s,%s,%s,%s,%s)
+                ON CONFLICT (user_id, file_id) DO NOTHING
+            """, (
+                item["user_id"],
+                item["file_id"],
+                item["file_type"],
+                item["caption"],
+                item["file_size"],
+                item["media_group_id"],
+                item["duplicate_count"]
+            ))
+
+            inserted += 1
+
+            # commit every 500 rows for safety
+            if inserted % 500 == 0:
+                conn.commit()
+
+        except Exception as e:
+            print("Import error:", e)
+            conn.rollback()
+
+    conn.commit()
+    cur.close()
+    release_connection(conn)
+
+    bot.reply_to(message, f"✅ Import completed\nImported: {inserted} media")@bot.message_handler(content_types=['photo','video','document','audio'])
 def handle_media(message):
 
     save_user(message.from_user)
@@ -672,6 +741,63 @@ def callback_handler(call):
             call.message.chat.id,
             call.message.message_id,
             reply_markup=admin_panel_markup()
+        )
+    elif data == "admin_export_db":
+
+        if call.from_user.id != ADMIN_ID:
+            bot.answer_callback_query(call.id, "Unauthorized")
+            return
+
+        conn = get_connection()
+        cur = conn.cursor()
+
+        cur.execute("""
+            SELECT sm.user_id, u.username, sm.file_id, sm.file_type,
+                sm.caption, sm.file_size, sm.media_group_id, sm.duplicate_count
+            FROM stored_media sm
+            LEFT JOIN users u ON sm.user_id = u.user_id
+            ORDER BY sm.id ASC
+        """)
+
+        rows = cur.fetchall()
+
+        cur.close()
+        release_connection(conn)
+
+        import json
+        import tempfile
+
+        data = []
+
+        for r in rows:
+            data.append({
+                "user_id": r[0],
+                "username": r[1],
+                "file_id": r[2],
+                "file_type": r[3],
+                "caption": r[4],
+                "file_size": r[5],
+                "media_group_id": r[6],
+                "duplicate_count": r[7]
+            })
+
+        temp_file = tempfile.NamedTemporaryFile(delete=False, suffix=".json")
+
+        with open(temp_file.name, "w", encoding="utf-8") as f:
+            json.dump(data, f)
+
+        bot.send_document(call.message.chat.id, open(temp_file.name, "rb"))
+
+        bot.answer_callback_query(call.id, "Database exported successfully")
+    elif data == "admin_import_db":
+
+        if call.from_user.id != ADMIN_ID:
+            bot.answer_callback_query(call.id, "Unauthorized")
+            return
+
+        bot.send_message(
+            call.message.chat.id,
+            "📥 Send the exported JSON database file to import."
         )
     elif data == "admin_users":
         if call.from_user.id != ADMIN_ID:
@@ -1310,6 +1436,57 @@ def stats(message):
         f"📅 Uploads Today: {today_uploads}\n"
         f"🆕 New Users Today: {new_users_today}"
     )
+#-------------------ADMIN COMMAND TO EXPORT DB---------------------#
+import json
+import tempfile 
+@bot.message_handler(commands=['export_db'])
+def export_db(message):
+
+    if message.from_user.id != ADMIN_ID:
+        return
+
+    conn = get_connection()
+    cur = conn.cursor()
+
+    cur.execute("""
+        SELECT user_id, file_id, file_type, caption, file_size, media_group_id, duplicate_count
+        FROM stored_media
+        ORDER BY id ASC
+    """)
+
+    rows = cur.fetchall()
+
+    cur.close()
+    release_connection(conn)
+
+    data = []
+
+    for r in rows:
+        data.append({
+            "user_id": r[0],
+            "file_id": r[1],
+            "file_type": r[2],
+            "caption": r[3],
+            "file_size": r[4],
+            "media_group_id": r[5],
+            "duplicate_count": r[6]
+        })
+
+    temp_file = tempfile.NamedTemporaryFile(delete=False, suffix=".json")
+
+    with open(temp_file.name, "w", encoding="utf-8") as f:
+        json.dump(data, f)
+
+    bot.send_document(message.chat.id, open(temp_file.name, "rb"))
+
+    bot.reply_to(message, f"✅ Export completed\nTotal media: {len(data)}")
+@bot.message_handler(commands=['import_db'])
+def import_db(message):
+
+    if message.from_user.id != ADMIN_ID:
+        return
+
+    bot.reply_to(message, "📤 Send the exported JSON file to import.")
 def resume_jobs():
     conn = get_connection()
     cur = conn.cursor()
