@@ -12,7 +12,7 @@ from psycopg2.pool import SimpleConnectionPool
 from telebot.apihelper import ApiTelegramException
 # ================= CONFIG ================= #
 
-BOT_TOKEN = "7858154079:AAFfAPLPt9cXk3ztcSx1XmrDCn-57zVy9wM"
+BOT_TOKEN = "8606303101:AAGw3fHdI5jpZOOuFCSoHlPKb1Urj4Oidk4"
 # DATABASE_URL = "YOUR_POSTGRES_URL"
 DATABASE_URL = os.getenv("DATABASE_URL")
 # ================= DATABASE POOL ================= #
